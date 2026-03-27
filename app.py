@@ -5,6 +5,7 @@ Features:
 - Export data (CSV, JSON, images)
 - Real-time OpenSky integration
 - Aircraft type identification
+- NO plotly dependency
 """
 
 import streamlit as st
@@ -18,8 +19,6 @@ import io
 import json
 import base64
 from datetime import datetime
-import plotly.graph_objects as go
-import plotly.express as px
 
 st.set_page_config(page_title="Stealth PDP Radar", page_icon="🔍", layout="wide")
 
@@ -365,7 +364,7 @@ def identify_aircraft_type(callsign):
     }
 
 # ============================================================================
-# OPENSKY FETCHER WITH FULL IDENTIFICATION
+# OPENSKY FETCHER
 # ============================================================================
 
 def fetch_opensky_radar_enhanced(lat, lon, radius):
@@ -414,7 +413,7 @@ def fetch_opensky_radar_enhanced(lat, lon, radius):
             # Use identified RCS or default
             rcs = aircraft_info.get('rcs_m2', np.random.uniform(5, 15))
             
-            # Adjust RCS for stealth aircraft (lower is stealthier)
+            # Adjust RCS for stealth aircraft
             stealth_factor = 1.0
             if aircraft_info.get('stealth_level') in ['Very High', 'High']:
                 stealth_factor = 0.1
@@ -440,8 +439,7 @@ def fetch_opensky_radar_enhanced(lat, lon, radius):
                 'altitude_m': altitude,
                 'velocity_mps': round(velocity, 1),
                 'rcs_m2': round(effective_rcs, 4),
-                'track_deg': round(track, 1),
-                'detection_confidence': 0.0  # Will be filled by PDP filter
+                'track_deg': round(track, 1)
             })
         
         if np.max(radar) > 0:
@@ -472,7 +470,7 @@ def bearing(lat1, lon1, lat2, lon2):
     return (degrees(atan2(x, y)) + 360) % 360
 
 # ============================================================================
-# PDP FILTER (Your existing implementation)
+# PDP FILTER
 # ============================================================================
 
 def pdp_filter(radar, omega, fringe, mixing, entangle):
@@ -544,36 +542,30 @@ def detect_targets(prob, threshold):
 # EXPORT FUNCTIONS
 # ============================================================================
 
-def export_to_csv(aircraft_df, detections_df):
+def export_to_csv(aircraft_df):
     """Export data to CSV"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     csv_data = aircraft_df.to_csv(index=False)
     return csv_data, f"stealth_radar_data_{timestamp}.csv"
 
-def export_to_json(aircraft_df, detections_df, parameters):
+def export_to_json(aircraft_df, parameters):
     """Export data to JSON"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     export_data = {
         'timestamp': timestamp,
         'parameters': parameters,
-        'aircraft_detections': aircraft_df.to_dict('records'),
-        'pdp_detections': detections_df.to_dict('records') if detections_df is not None else []
+        'aircraft_detections': aircraft_df.to_dict('records')
     }
     json_data = json.dumps(export_data, indent=2)
     return json_data, f"stealth_radar_data_{timestamp}.json"
 
-def export_to_image(fig):
-    """Export figure to PNG"""
+def get_image_download_link(fig, filename):
+    """Generate download link for image"""
     buf = io.BytesIO()
     fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
     buf.seek(0)
-    return buf
-
-def get_image_download_link(fig, filename):
-    """Generate download link for image"""
-    buf = export_to_image(fig)
     b64 = base64.b64encode(buf.read()).decode()
-    href = f'<a href="data:image/png;base64,{b64}" download="{filename}">Download PNG</a>'
+    href = f'<a href="data:image/png;base64,{b64}" download="{filename}">📥 Download PNG</a>'
     return href
 
 # ============================================================================
@@ -720,26 +712,22 @@ st.pyplot(fig)
 
 # Export handling
 if export_button:
-    if aircraft_df is not None:
-        detections_df = pd.DataFrame([{
-            'range_km': d['center'][0]/256*300,
-            'azimuth_deg': d['center'][1]/360*360,
-            'confidence': d['confidence']
-        } for d in detections])
-        
+    if aircraft_df is not None and len(aircraft_df) > 0:
         params = {
             'omega': omega, 'fringe': fringe, 'entanglement': entanglement,
             'mixing': mixing, 'threshold': threshold, 'timestamp': datetime.now().isoformat()
         }
         
         if export_format == "CSV":
-            csv_data, filename = export_to_csv(aircraft_df, detections_df)
+            csv_data, filename = export_to_csv(aircraft_df)
             st.download_button("📥 Download CSV", csv_data, filename, "text/csv")
         elif export_format == "JSON":
-            json_data, filename = export_to_json(aircraft_df, detections_df, params)
+            json_data, filename = export_to_json(aircraft_df, params)
             st.download_button("📥 Download JSON", json_data, filename, "application/json")
         elif export_format == "Image (PNG)":
             st.markdown(get_image_download_link(fig, f"stealth_radar_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"), unsafe_allow_html=True)
+    else:
+        st.warning("No data to export")
 
 # Aircraft Display
 if aircraft_df is not None and len(aircraft_df) > 0:
@@ -755,7 +743,7 @@ if aircraft_df is not None and len(aircraft_df) > 0:
     col_stats3.metric("Stealth Capable", stealth_count)
     col_stats4.metric("Avg RCS", f"{aircraft_df['rcs_m2'].mean():.2f} m²")
     
-    # Display table with all columns
+    # Display table
     display_df = aircraft_df[['callsign', 'aircraft_name', 'aircraft_type', 'country', 
                               'stealth_level', 'range_km', 'azimuth_deg', 'altitude_m', 
                               'velocity_mps', 'rcs_m2']].copy()
@@ -766,9 +754,9 @@ if aircraft_df is not None and len(aircraft_df) > 0:
 
 # Military Summary
 if aircraft_df is not None and len(aircraft_df) > 0:
-    with st.expander("🎖️ Military Aircraft Summary"):
-        military_df = aircraft_df[aircraft_df['country'].isin(['USA', 'Russia', 'China', 'Europe'])].copy()
-        if len(military_df) > 0:
+    military_df = aircraft_df[aircraft_df['country'].isin(['USA', 'Russia', 'China', 'Europe'])].copy()
+    if len(military_df) > 0:
+        with st.expander("🎖️ Military Aircraft Summary"):
             for _, row in military_df.iterrows():
                 st.write(f"**{row['aircraft_name']}** ({row['country']})")
                 st.write(f"- Callsign: {row['callsign']} | Range: {row['range_km']} km | RCS: {row['rcs_m2']:.4f} m²")
