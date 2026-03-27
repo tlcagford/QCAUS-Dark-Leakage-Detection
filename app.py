@@ -1,6 +1,5 @@
 """
-StealthPDPRadar - REAL AIRCRAFT DETECTION
-Properly handles API timeouts without fake detections
+StealthPDPRadar - WORKING SYNTHETIC TEST
 """
 
 import streamlit as st
@@ -29,9 +28,7 @@ REAL_AIRCRAFT_TYPES = {
     'F15': {'name': 'F-15 Eagle', 'country': 'USA', 'type': '4th Gen Fighter', 'rcs_m2': 5.0, 'stealth_level': 'None'},
     'F16': {'name': 'F-16 Fighting Falcon', 'country': 'USA', 'type': '4th Gen Fighter', 'rcs_m2': 1.2, 'stealth_level': 'Low'},
     'C17': {'name': 'C-17 Globemaster', 'country': 'USA', 'type': 'Transport', 'rcs_m2': 80.0, 'stealth_level': 'None'},
-    'KC135': {'name': 'KC-135 Stratotanker', 'country': 'USA', 'type': 'Tanker', 'rcs_m2': 60.0, 'stealth_level': 'None'},
     'SU57': {'name': 'Su-57 Felon', 'country': 'Russia', 'type': '5th Gen Fighter', 'rcs_m2': 0.01, 'stealth_level': 'Medium'},
-    'SU35': {'name': 'Su-35 Flanker', 'country': 'Russia', 'type': '4.5 Gen Fighter', 'rcs_m2': 3.0, 'stealth_level': 'Low'},
     'J20': {'name': 'Chengdu J-20', 'country': 'China', 'type': '5th Gen Fighter', 'rcs_m2': 0.005, 'stealth_level': 'High'},
 }
 
@@ -48,7 +45,6 @@ def identify_aircraft_type(callsign):
         'AF1': ('VC-25', 'Presidential', 25),
         'VIPER': ('F-16 Fighting Falcon', 'Fighter', 1.2),
         'EAGLE': ('F-15 Eagle', 'Fighter', 5.0),
-        'HORNET': ('F/A-18 Hornet', 'Fighter', 1.5),
     }
     
     for prefix, (name, type_name, rcs) in us_military.items():
@@ -69,11 +65,11 @@ def identify_aircraft_type(callsign):
     return {'name': 'Unknown', 'type': 'Unknown', 'country': 'Unknown', 'rcs_m2': np.random.uniform(5, 15), 'stealth_level': 'Unknown'}
 
 # ============================================================================
-# OPENSKY FETCHER - NO FAKE DATA
+# OPENSKY FETCHER
 # ============================================================================
 
 def fetch_opensky_real(lat, lon, radius):
-    """Fetch real aircraft data - returns None if no data"""
+    """Fetch real aircraft data"""
     try:
         bbox = (lat - radius, lat + radius, lon - radius, lon + radius)
         url = "https://opensky-network.org/api/states/all"
@@ -244,6 +240,54 @@ def get_image_download_link(fig, filename):
     return href
 
 # ============================================================================
+# SYNTHETIC TEST DATA GENERATOR
+# ============================================================================
+
+def generate_synthetic_test(target_range, target_azimuth, stealth_level):
+    """Generate clean synthetic test data with one stealth target"""
+    range_bins, az_bins = 256, 360
+    max_range = 300
+    
+    radar = np.zeros((range_bins, az_bins))
+    
+    r_idx = int(target_range / max_range * (range_bins - 1))
+    az_idx = int(target_azimuth / 360 * (az_bins - 1))
+    
+    # Calculate RCS based on stealth level
+    rcs = 10.0 * (1 - stealth_level)
+    snr = rcs / (target_range**2 + 10)
+    
+    # Add Gaussian target
+    for dr in range(-12, 13):
+        for da in range(-10, 11):
+            rr = r_idx + dr
+            aa = (az_idx + da) % az_bins
+            if 0 <= rr < range_bins:
+                dist = np.sqrt(dr**2 + da**2)
+                radar[rr, aa] += snr * np.exp(-dist**2 / 30)
+    
+    # Normalize
+    radar = (radar - radar.min()) / (radar.max() - radar.min() + 1e-8)
+    
+    # Create aircraft dataframe
+    stealth_level_text = "Very High" if stealth_level > 0.8 else "High" if stealth_level > 0.5 else "Medium" if stealth_level > 0.2 else "Low"
+    
+    aircraft_list = [{
+        'callsign': 'STEALTH',
+        'aircraft_name': 'Stealth Target',
+        'aircraft_type': 'Stealth Demonstrator',
+        'country': 'Test',
+        'stealth_level': stealth_level_text,
+        'range_km': target_range,
+        'azimuth_deg': target_azimuth,
+        'altitude_m': 8000,
+        'velocity_mps': 250,
+        'rcs_m2': round(rcs, 4)
+    }]
+    
+    return radar, pd.DataFrame(aircraft_list), r_idx, az_idx
+
+# ============================================================================
 # SIDEBAR
 # ============================================================================
 
@@ -283,7 +327,7 @@ with st.sidebar:
         st.caption("For testing PDP filter with simulated targets")
         target_range = st.slider("Target Range (km)", 50, 250, 150)
         target_azimuth = st.slider("Target Azimuth (deg)", 0, 360, 180)
-        stealth = st.slider("Stealth Level", 0.0, 1.0, 0.15)
+        stealth_level = st.slider("Stealth Level", 0.0, 1.0, 0.15)
         generate = st.button("🔄 Generate", type="primary", use_container_width=True)
     
     st.header("📤 Export")
@@ -296,72 +340,43 @@ with st.sidebar:
 
 radar_image = None
 aircraft_df = None
+target_info = None
 status_msg = ""
 
+# Synthetic Test
+if data_source == "Synthetic Test":
+    if generate or 'radar_synthetic' not in st.session_state:
+        radar_image, aircraft_df, r_idx, az_idx = generate_synthetic_test(target_range, target_azimuth, stealth_level)
+        target_info = (target_range, target_azimuth, r_idx, az_idx, 10.0 * (1 - stealth_level))
+        st.session_state.radar_synthetic = radar_image
+        st.session_state.aircraft_synthetic = aircraft_df
+        st.session_state.target_info = target_info
+        status_msg = "Synthetic test scenario - 1 stealth target"
+    else:
+        radar_image = st.session_state.radar_synthetic
+        aircraft_df = st.session_state.aircraft_synthetic
+        target_info = st.session_state.target_info
+        status_msg = "Synthetic test scenario"
+
 # OpenSky Live
-if data_source == "OpenSky Live":
+elif data_source == "OpenSky Live":
     if 'fetch_opensky' in locals() and fetch_opensky:
         with st.spinner("Fetching real aircraft data from OpenSky..."):
             radar_image, aircraft_df, status_msg = fetch_opensky_real(radar_lat, radar_lon, radius)
             if radar_image is not None:
                 st.session_state.radar = radar_image
                 st.session_state.aircraft = aircraft_df
-                st.session_state.status = status_msg
-            else:
-                st.session_state.status = status_msg
-                # Don't create fake data - just show error
-                if 'radar' in st.session_state:
-                    radar_image = st.session_state.radar
-                    aircraft_df = st.session_state.aircraft
-                else:
-                    radar_image = None
-                    aircraft_df = None
+                target_info = None
     else:
         if 'radar' in st.session_state:
             radar_image = st.session_state.radar
             aircraft_df = st.session_state.aircraft
-            status_msg = st.session_state.get('status', 'Last successful fetch')
+            target_info = None
         else:
             radar_image = None
             aircraft_df = None
-            status_msg = "Click 'Fetch Live Data' to see real aircraft"
 
-# Synthetic Test
-elif data_source == "Synthetic Test":
-    if generate or 'radar_synthetic' not in st.session_state:
-        radar_image = np.zeros((256, 360))
-        r_idx = int(150 / 300 * 255)
-        az_idx = int(180 / 360 * 359)
-        for dr in range(-12, 13):
-            for da in range(-10, 11):
-                rr = r_idx + dr
-                aa = (az_idx + da) % 360
-                if 0 <= rr < 256:
-                    radar_image[rr, aa] += 0.8 * np.exp(-(dr**2 + da**2) / 30)
-        radar_image = (radar_image - radar_image.min()) / (radar_image.max() - radar_image.min())
-        
-        aircraft_list = [{
-            'callsign': 'STEALTH',
-            'aircraft_name': 'Stealth Target',
-            'aircraft_type': 'Stealth',
-            'country': 'Test',
-            'stealth_level': 'Very High',
-            'range_km': 150,
-            'azimuth_deg': 180,
-            'altitude_m': 8000,
-            'velocity_mps': 250,
-            'rcs_m2': 0.001
-        }]
-        aircraft_df = pd.DataFrame(aircraft_list)
-        st.session_state.radar_synthetic = radar_image
-        st.session_state.aircraft_synthetic = aircraft_df
-        status_msg = "Synthetic test scenario - 1 stealth target"
-    else:
-        radar_image = st.session_state.radar_synthetic
-        aircraft_df = st.session_state.aircraft_synthetic
-        status_msg = "Synthetic test scenario"
-
-# Display status message
+# Display status
 if status_msg:
     if "✅" in status_msg:
         st.sidebar.success(status_msg)
@@ -370,7 +385,7 @@ if status_msg:
     else:
         st.sidebar.info(status_msg)
 
-# Only process if we have radar data
+# Apply PDP filter if we have radar data
 if radar_image is not None:
     with st.spinner("Applying PDP quantum filter..."):
         dark, residuals, prob, fusion = pdp_filter(radar_image, omega, fringe, mixing, entanglement)
@@ -401,16 +416,13 @@ if radar_image is None:
     **OpenSky API is currently timing out.** This is normal - the free API has rate limits.
     
     **Try these options:**
-    1. **Wait 30 seconds** and click "Fetch Live Data" again
-    2. **Switch to "Synthetic Test"** mode to test the PDP filter
+    1. **Switch to "Synthetic Test"** mode to test the PDP filter
+    2. **Wait 30 seconds** and click "Fetch Live Data" again
     3. **Try different coordinates** (Denver area is often busy)
     4. **Try during daytime hours** when more aircraft are flying
-    
-    The PDP filter works on any radar data - you can also upload your own files!
     """)
     
-    # Show synthetic test button
-    if st.button("🚀 Try Synthetic Test Mode Instead"):
+    if st.button("🚀 Switch to Synthetic Test Mode"):
         st.session_state.data_source = "Synthetic Test"
         st.rerun()
 
@@ -419,9 +431,17 @@ elif radar_image is not None:
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
     extent = [0, 360, 300, 0]
 
-    # Left: Radar
+    # Left: Radar with overlay
     ax1.imshow(radar_image, aspect='auto', cmap='viridis', extent=extent)
     
+    # Add ground truth target for synthetic test
+    if target_info:
+        target_range, target_azimuth, r_idx, az_idx, rcs = target_info
+        ax1.plot(target_azimuth, target_range, 'ro', markersize=14,
+                markeredgecolor='white', markeredgewidth=2, label='Target')
+        ax1.legend()
+    
+    # Add aircraft markers
     if aircraft_df is not None and len(aircraft_df) > 0:
         for _, row in aircraft_df.iterrows():
             color = 'red' if row.get('stealth_level') in ['Very High', 'High'] else 'blue'
@@ -429,6 +449,7 @@ elif radar_image is not None:
             ax1.plot(row['azimuth_deg'], row['range_km'], marker=marker, color=color,
                     markersize=8, markeredgecolor='white', markeredgewidth=1, alpha=0.7)
     
+    # Add detection boxes
     for d in detections:
         r = d['center'][0] / 256 * 300
         az = d['center'][1] / 360 * 360
@@ -443,7 +464,7 @@ elif radar_image is not None:
     ax1.set_title("📡 Radar with Detection Overlay")
     plt.colorbar(ax1.images[0], ax=ax1)
     
-    # Right: Probability
+    # Right: Probability map
     ax2.imshow(prob, aspect='auto', cmap='hot', extent=extent, vmin=0, vmax=1)
     for d in detections:
         r = d['center'][0] / 256 * 300
@@ -451,6 +472,9 @@ elif radar_image is not None:
         from matplotlib.patches import Circle
         circle = Circle((az, r), 8, edgecolor='lime', facecolor='none', linewidth=2)
         ax2.add_patch(circle)
+    
+    if target_info:
+        ax2.plot(target_azimuth, target_range, 'ro', markersize=10, alpha=0.5)
     
     ax2.set_xlabel("Azimuth (deg)")
     ax2.set_ylabel("Range (km)")
@@ -460,19 +484,34 @@ elif radar_image is not None:
     plt.tight_layout()
     st.pyplot(fig)
     
-    # Aircraft Table
+    # Aircraft Table (with correct column names)
     if aircraft_df is not None and len(aircraft_df) > 0:
         st.subheader("✈️ Aircraft Detections")
         
         col1, col2, col3 = st.columns(3)
         col1.metric("Total", len(aircraft_df))
-        military_count = len(aircraft_df[aircraft_df['country'] == 'USA'])
+        military_count = len(aircraft_df[aircraft_df['country'] == 'USA']) if 'country' in aircraft_df.columns else 0
         col2.metric("Military", military_count)
         stealth_count = len(aircraft_df[aircraft_df['stealth_level'].isin(['Very High', 'High'])])
         col3.metric("Stealth Capable", stealth_count)
         
-        display_df = aircraft_df[['callsign', 'aircraft_name', 'type', 'country', 'stealth_level', 'range_km', 'azimuth_deg', 'rcs_m2']].head(20)
-        display_df.columns = ['Callsign', 'Aircraft', 'Type', 'Country', 'Stealth', 'Range(km)', 'Azimuth(°)', 'RCS(m²)']
+        # Use correct column names
+        display_columns = ['callsign', 'aircraft_name', 'aircraft_type', 'country', 'stealth_level', 'range_km', 'azimuth_deg', 'rcs_m2']
+        available_columns = [col for col in display_columns if col in aircraft_df.columns]
+        display_df = aircraft_df[available_columns].head(20)
+        
+        # Rename for display
+        rename_map = {
+            'callsign': 'Callsign',
+            'aircraft_name': 'Aircraft',
+            'aircraft_type': 'Type',
+            'country': 'Country',
+            'stealth_level': 'Stealth',
+            'range_km': 'Range(km)',
+            'azimuth_deg': 'Azimuth(°)',
+            'rcs_m2': 'RCS(m²)'
+        }
+        display_df = display_df.rename(columns=rename_map)
         st.dataframe(display_df, use_container_width=True)
     
     # Fusion and components
@@ -482,6 +521,19 @@ elif radar_image is not None:
     ax_fusion.set_xlabel("Azimuth (deg)")
     ax_fusion.set_ylabel("Range (km)")
     st.pyplot(fig_fusion)
+    
+    # Components
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("🌑 Dark-Mode Leakage")
+        fig_dark, ax_dark = plt.subplots(figsize=(8, 4))
+        ax_dark.imshow(dark, aspect='auto', cmap='Blues')
+        st.pyplot(fig_dark)
+    with col2:
+        st.subheader("🟢 Entanglement Residuals")
+        fig_res, ax_res = plt.subplots(figsize=(8, 4))
+        ax_res.imshow(residuals, aspect='auto', cmap='Greens')
+        st.pyplot(fig_res)
 
 # Export
 if export_button and aircraft_df is not None and len(aircraft_df) > 0:
