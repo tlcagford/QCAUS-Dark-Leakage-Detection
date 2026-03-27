@@ -1,39 +1,48 @@
 """
-StealthPDPRadar - WORKING VERSION WITH VISUAL OVERLAYS
+StealthPDPRadar - FINAL WORKING VERSION
+Optimized for accurate stealth detection with minimal false positives
 """
 
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, label, center_of_mass
 from scipy.fft import fft2, ifft2, fftshift
 
 st.set_page_config(page_title="Stealth PDP Radar", page_icon="🔍", layout="wide")
 
 # ============================================================================
-# SIDEBAR
+# SIDEBAR - OPTIMIZED PARAMETERS
 # ============================================================================
 
 with st.sidebar:
     st.header("⚙️ PDP Filter Parameters")
-    omega = st.slider("Ω (Entanglement Strength)", 0.0, 1.0, 0.75, 0.01)
-    fringe_scale = st.slider("Fringe Scale", 0.1, 5.0, 1.8, 0.1)
-    entanglement_strength = st.slider("Quantum Entanglement", 0.0, 1.0, 0.45, 0.01)
-    mixing_angle = st.slider("ε (Mixing Angle)", 0.0, 0.5, 0.18, 0.01)
+    omega = st.slider("Ω (Entanglement Strength)", 0.0, 1.0, 0.75, 0.01,
+                      help="Higher = more sensitive to dark-mode leakage")
+    fringe_scale = st.slider("Fringe Scale", 0.1, 5.0, 1.8, 0.1,
+                              help="Scale of quantum interference patterns")
+    entanglement = st.slider("Quantum Entanglement", 0.0, 1.0, 0.45, 0.01,
+                              help="Strength of von Neumann entropy")
+    mixing = st.slider("ε (Mixing Angle)", 0.0, 0.5, 0.18, 0.01,
+                       help="Photon-dark photon coupling")
     
-    st.header("🎯 Target")
+    st.header("🎯 Detection Settings")
+    threshold = st.slider("Detection Threshold", 0.0, 1.0, 0.5, 0.01,
+                          help="Lower = more detections but more false alarms")
+    min_size = st.slider("Min Detection Size (pixels)", 10, 100, 30,
+                         help="Filter out small false detections")
+    
+    st.header("🎯 Test Target")
     target_range = st.slider("Target Range (km)", 50, 250, 150)
     target_azimuth = st.slider("Target Azimuth (deg)", 0, 360, 180)
-    stealth_level = st.slider("Stealth Level (RCS Reduction)", 0.0, 1.0, 0.15, 0.01)
+    stealth_level = st.slider("Stealth Level (0=invisible, 1=normal)", 0.0, 1.0, 0.15)
+    noise = st.slider("Noise Level", 0.0, 0.3, 0.12)
     
-    st.header("🌊 Noise")
-    noise = st.slider("Noise Level", 0.0, 0.3, 0.12, 0.01)
-    
-    generate = st.button("🔄 Generate", type="primary")
+    generate = st.button("🔄 Generate New Scenario", type="primary")
 
 # ============================================================================
-# GENERATE RADAR DATA
+# RADAR DATA GENERATOR
 # ============================================================================
 
 def generate_radar(target_range_km, target_azimuth_deg, stealth, noise):
@@ -43,42 +52,38 @@ def generate_radar(target_range_km, target_azimuth_deg, stealth, noise):
     
     radar = np.zeros((range_bins, azimuth_bins))
     
-    # Target position
     r_idx = int(target_range_km / max_range * (range_bins - 1))
     az_idx = int(target_azimuth_deg / 360 * (azimuth_bins - 1))
     
-    # RCS: normal = 10, stealth = reduced
+    # RCS: normal = 10 m², stealth = reduced
     rcs = 10.0 * (1 - stealth)
-    
-    # Signal strength
     snr = rcs / (target_range_km**2 + 10)
     
     # Add target with Gaussian shape
-    for dr in range(-10, 11):
-        for da in range(-8, 9):
+    for dr in range(-8, 9):
+        for da in range(-6, 7):
             rr = r_idx + dr
             aa = (az_idx + da) % azimuth_bins
             if 0 <= rr < range_bins:
                 dist = np.sqrt(dr**2 + da**2)
-                radar[rr, aa] += snr * np.exp(-dist**2 / 30)
+                radar[rr, aa] += snr * np.exp(-dist**2 / 25)
     
     # Add noise
     radar += np.random.randn(range_bins, azimuth_bins) * noise
     
     # Normalize
-    radar = radar - np.min(radar)
-    radar = radar / (np.max(radar) + 1e-8)
+    radar = (radar - np.min(radar)) / (np.max(radar) - np.min(radar) + 1e-8)
     
     return radar, r_idx, az_idx, rcs
 
 # ============================================================================
-# PDP FILTER
+# PDP FILTER WITH PRECISION OPTIMIZATION
 # ============================================================================
 
-def pdp_filter(radar, omega, fringe, mixing, entangle):
+def pdp_filter_optimized(radar, omega, fringe, mixing, entangle):
     rows, cols = radar.shape
     
-    # FFT
+    # FFT for spectral duality
     fft_img = fft2(radar)
     fft_shift = fftshift(fft_img)
     
@@ -88,26 +93,26 @@ def pdp_filter(radar, omega, fringe, mixing, entangle):
     X, Y = np.meshgrid(x, y)
     R = np.sqrt(X**2 + Y**2)
     
-    # Dark mode filter
+    # Dark mode filter (quantum mixing)
     dark_mask = mixing * np.exp(-omega * R**2) * (1 - np.exp(-R**2 / fringe))
     dark_fft = fft_shift * dark_mask
     dark = np.abs(ifft2(fftshift(dark_fft)))
     
-    # Entanglement residuals
-    total = np.sum(radar**2) + 1e-10
+    # Entanglement residuals (von Neumann entropy)
+    total_power = np.sum(radar**2) + 1e-10
     ordinary = radar - dark
-    rho = ordinary**2 / total
+    rho = ordinary**2 / total_power
     entropy = -rho * np.log(np.maximum(rho, 1e-10))
-    interference = (np.abs(ordinary + dark)**2 - ordinary**2 - dark**2) / total
+    interference = (np.abs(ordinary + dark)**2 - ordinary**2 - dark**2) / total_power
     residuals = entropy * entangle + np.abs(interference) * mixing
     residuals = gaussian_filter(residuals, sigma=1.0)
     
-    # Stealth probability
+    # Stealth probability (normalized)
     prob = dark * residuals
-    prob = prob / (np.max(prob) + 1e-8)
-    prob = np.clip(prob * 1.5, 0, 1)
+    prob = (prob - np.min(prob)) / (np.max(prob) - np.min(prob) + 1e-8)
+    prob = np.clip(prob * 1.2, 0, 1)
     
-    # Fusion image
+    # Fusion visualization
     def norm(x):
         return (x - np.min(x)) / (np.max(x) - np.min(x) + 1e-8)
     
@@ -120,72 +125,102 @@ def pdp_filter(radar, omega, fringe, mixing, entangle):
     return dark, residuals, prob, rgb
 
 # ============================================================================
-# GENERATE DATA
+# DETECTION WITH FALSE POSITIVE FILTERING
 # ============================================================================
 
+def detect_targets(prob, threshold, min_size):
+    """Detect targets with size filtering to reduce false positives"""
+    binary = prob > threshold
+    labeled, num_features = label(binary)
+    
+    detections = []
+    for i in range(1, num_features + 1):
+        mask = (labeled == i)
+        size = np.sum(mask)
+        if size >= min_size:
+            com = center_of_mass(prob, labeled, i)
+            confidence = np.mean(prob[mask])
+            detections.append({
+                'id': i,
+                'center': com,
+                'size': size,
+                'confidence': confidence
+            })
+    
+    return detections
+
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+
+# Generate data
 radar, r_idx, az_idx, rcs = generate_radar(target_range, target_azimuth, stealth_level, noise)
 
 # Apply filter
-dark, residuals, prob, fusion = pdp_filter(radar, omega, fringe_scale, mixing_angle, entanglement_strength)
+dark, residuals, prob, fusion = pdp_filter_optimized(
+    radar, omega, fringe_scale, mixing, entanglement)
+
+# Detect targets
+detections = detect_targets(prob, threshold, min_size)
+
+# Calculate probability at target location
+prob_at_target = prob[r_idx, az_idx] if 0 <= r_idx < 256 and 0 <= az_idx < 360 else 0
 
 # ============================================================================
 # DISPLAY
 # ============================================================================
 
 st.title("🔍 Stealth Photon-Dark-Photon Quantum Radar")
-st.markdown("**Spectral duality filter** with visual overlay detection")
+st.markdown("**Optimized detection with minimal false positives**")
 
 # Metrics
-max_prob = np.max(prob)
-prob_at_target = prob[r_idx, az_idx]
-detection_success = prob_at_target > 0.4
-
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Target Range", f"{target_range} km")
 col2.metric("RCS", f"{rcs:.3f} m²")
-col3.metric("Max Probability", f"{max_prob:.3f}")
-col4.metric("Detection", "✅ YES" if detection_success else "⚠️ PARTIAL")
+col3.metric("P(Target)", f"{prob_at_target:.3f}")
+col4.metric("Detections", len(detections))
+col5.metric("Detection", "✅ YES" if prob_at_target > threshold else "❌ NO")
 
-# Main plot with overlay
+# Main plot with detection overlay
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-
 extent = [0, 360, 300, 0]
 
 # Left: Radar with overlay
-ax1.imshow(radar, aspect='auto', cmap='viridis', extent=extent)
-ax1.plot(target_azimuth, target_range, 'ro', markersize=15, 
-         markeredgecolor='white', markeredgewidth=2, label='Target')
+im1 = ax1.imshow(radar, aspect='auto', cmap='viridis', extent=extent)
+ax1.plot(target_azimuth, target_range, 'ro', markersize=15,
+         markeredgecolor='white', markeredgewidth=2, label='True Target')
 
-# Add detection box if probability high
-if prob_at_target > 0.3:
+# Add detection boxes
+for det in detections:
+    r_center = det['center'][0] / 256 * 300
+    az_center = det['center'][1] / 360 * 360
     from matplotlib.patches import Rectangle
-    r_km = target_range
-    az_deg = target_azimuth
-    rect = Rectangle((az_deg - 15, r_km - 15), 30, 30,
+    rect = Rectangle((az_center - 12, r_center - 12), 24, 24,
                      linewidth=3, edgecolor='lime', facecolor='none', linestyle='--')
     ax1.add_patch(rect)
-    ax1.text(az_deg - 10, r_km - 25, f"DETECTED\nP={prob_at_target:.2f}",
-            fontsize=9, color='lime', weight='bold',
-            bbox=dict(boxstyle='round', facecolor='black', alpha=0.7))
+    ax1.text(az_center - 10, r_center - 20, f"DETECTED\nP={det['confidence']:.2f}",
+             fontsize=8, color='lime', weight='bold',
+             bbox=dict(boxstyle='round', facecolor='black', alpha=0.7))
 
 ax1.set_xlabel("Azimuth (deg)")
 ax1.set_ylabel("Range (km)")
 ax1.set_title("📡 Radar with Detection Overlay")
 ax1.legend()
-plt.colorbar(ax1.images[0], ax=ax1, label="Intensity")
+plt.colorbar(im1, ax=ax1, label="Intensity")
 
-# Right: Stealth probability map
+# Right: Probability map
 im2 = ax2.imshow(prob, aspect='auto', cmap='hot', extent=extent, vmin=0, vmax=1)
 ax2.plot(target_azimuth, target_range, 'ro', markersize=15,
          markeredgecolor='white', markeredgewidth=2)
-if prob_at_target > 0.3:
+
+for det in detections:
+    r_center = det['center'][0] / 256 * 300
+    az_center = det['center'][1] / 360 * 360
     from matplotlib.patches import Circle
-    circle = Circle((target_azimuth, target_range), radius=12,
+    circle = Circle((az_center, r_center), radius=10,
                     edgecolor='lime', facecolor='none', linewidth=3)
     ax2.add_patch(circle)
-    ax2.text(target_azimuth - 10, target_range - 20, f"STEALTH\nP={prob_at_target:.2f}",
-            fontsize=9, color='lime', weight='bold',
-            bbox=dict(boxstyle='round', facecolor='black', alpha=0.7))
+
 ax2.set_xlabel("Azimuth (deg)")
 ax2.set_ylabel("Range (km)")
 ax2.set_title("🎯 Stealth Probability Map")
@@ -217,18 +252,19 @@ with col2:
     ax.imshow(residuals, aspect='auto', cmap='Greens')
     st.pyplot(fig)
 
-# Detection metrics
+# Performance metrics
 st.subheader("📈 Detection Performance")
 
-# Calculate metrics
+# Create ground truth region
 gt_region = np.zeros((256, 360), dtype=bool)
-gt_region[max(0, r_idx-10):min(256, r_idx+10), 
-          max(0, az_idx-10):min(360, az_idx+10)] = True
+gt_region[max(0, r_idx-15):min(256, r_idx+15), 
+          max(0, az_idx-15):min(360, az_idx+15)] = True
 
-detections = prob > 0.4
-tp = np.sum(detections & gt_region)
-fp = np.sum(detections & ~gt_region)
-fn = np.sum(~detections & gt_region)
+# Calculate metrics
+detections_binary = prob > threshold
+tp = np.sum(detections_binary & gt_region)
+fp = np.sum(detections_binary & ~gt_region)
+fn = np.sum(~detections_binary & gt_region)
 
 precision = tp / (tp + fp) if (tp + fp) > 0 else 0
 recall = tp / (tp + fn) if (tp + fn) > 0 else 0
@@ -239,12 +275,29 @@ m1.metric("Precision", f"{precision:.3f}")
 m2.metric("Recall", f"{recall:.3f}")
 m3.metric("F1 Score", f"{f1:.3f}")
 
-if f1 > 0.5:
-    st.success(f"✅ Excellent! Stealth target detected with F1 = {f1:.3f}")
-elif f1 > 0.2:
-    st.warning(f"⚠️ Partial detection (F1 = {f1:.3f}) - try increasing Ω to 0.8-0.9")
+# Performance feedback
+if f1 > 0.7:
+    st.success(f"✅ EXCELLENT! F1 Score = {f1:.3f} - Optimal detection")
+elif f1 > 0.4:
+    st.warning(f"⚠️ GOOD - F1 Score = {f1:.3f} - Try adjusting threshold for better precision")
 else:
-    st.info(f"💡 Low detection (F1 = {f1:.3f}) - Recommended: Ω=0.8, Fringe=1.8, Threshold=0.4")
+    st.info(f"💡 ADJUST - F1 = {f1:.3f} | Try: Ω=0.7-0.8, Threshold=0.4-0.5")
+
+# Detection table
+with st.expander("📋 Detection Results"):
+    if detections:
+        det_data = []
+        for d in detections:
+            det_data.append({
+                'ID': d['id'],
+                'Range (km)': f"{d['center'][0] / 256 * 300:.1f}",
+                'Azimuth (deg)': f"{d['center'][1] / 360 * 360:.1f}",
+                'Confidence': f"{d['confidence']:.3f}",
+                'Size (pixels)': d['size']
+            })
+        st.dataframe(pd.DataFrame(det_data))
+    else:
+        st.info("No detections above threshold")
 
 # Ground truth
 with st.expander("📋 Ground Truth"):
@@ -253,21 +306,58 @@ with st.expander("📋 Ground Truth"):
         'Range (km)': target_range,
         'Azimuth (deg)': target_azimuth,
         'RCS (m²)': f"{rcs:.3f}",
-        'Detection Probability': f"{prob_at_target:.3f}",
-        'Status': '✅ DETECTED' if detection_success else '⚠️ PARTIAL'
+        'Detection Prob': f"{prob_at_target:.3f}",
+        'Status': '✅ DETECTED' if prob_at_target > threshold else '❌ MISSED'
     }]))
 
 # Parameters
-with st.expander("⚙️ Parameters"):
+with st.expander("⚙️ Current Parameters"):
     st.json({
         'omega': omega,
         'fringe_scale': fringe_scale,
-        'entanglement_strength': entanglement_strength,
-        'mixing_angle': mixing_angle,
+        'entanglement': entanglement,
+        'mixing_angle': mixing,
+        'threshold': threshold,
+        'min_size': min_size,
         'target_rcs': rcs,
         'detection_probability': prob_at_target,
+        'precision': precision,
+        'recall': recall,
         'f1_score': f1
     })
 
+# Settings guide
+with st.expander("📖 Optimal Settings Guide"):
+    st.markdown("""
+    ### Recommended Settings for Best Results
+    
+    | Parameter | Recommended | Current | Effect |
+    |-----------|-------------|---------|--------|
+    | Ω (Entanglement) | **0.70-0.80** | {:.2f} | Higher = more sensitive |
+    | Fringe Scale | **1.5-2.0** | {:.2f} | Scale of quantum patterns |
+    | Quantum Entanglement | **0.40-0.50** | {:.2f} | Von Neumann entropy strength |
+    | ε (Mixing) | **0.15-0.20** | {:.2f} | Photon-dark photon coupling |
+    | Threshold | **0.40-0.55** | {:.2f} | Balance precision vs recall |
+    
+    ### Current Performance
+    - **Detection Status**: {} at P={:.2f}
+    - **False Positives**: {} detections outside target region
+    - **F1 Score**: {:.3f}
+    
+    ### Next Steps
+    1. Adjust **Ω** to 0.75 for optimal dark-mode extraction
+    2. Set **Threshold** to 0.45 to reduce false positives
+    3. Increase **Min Size** to filter small noise detections
+    """.format(
+        omega, fringe_scale, entanglement, mixing, threshold,
+        "✅ DETECTED" if prob_at_target > threshold else "❌ NOT DETECTED",
+        prob_at_target, fp, f1
+    ))
+
 st.markdown("---")
-st.markdown("✅ **WORKING** - Visual overlay shows detection with green boxes when probability > 0.4")
+st.markdown("""
+<div style="text-align: center; color: #666;">
+    ✅ **WORKING** | Precision: {:.3f} | Recall: {:.3f} | F1: {:.3f}<br>
+    © 2026 Tony E. Ford | QCAUS Framework
+</div>
+""".format(precision, recall, f1), unsafe_allow_html=True)
