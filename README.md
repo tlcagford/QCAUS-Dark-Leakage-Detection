@@ -1,38 +1,20 @@
+# StealthPDPRadar
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](#)
-[![License: Dual License](https://img.shields.io/badge/license-Dual--License-blue)
-)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](#)
+## Photon-Dark-Photon Quantum Radar for Stealth Detection
 
-[updated_readme.md](https://github.com/user-attachments/files/23573346/updated_readme.md)
-# STEALTH PHOTON DARK PHOTON QUANTUM RADAR
+Spectral duality filter that extracts green-speck entanglement residuals and blue-halo IR fusion to detect stealth objects by revealing dark-mode leakage in ordinary radar returns.
 
+## Features
 
----
+- **PDP Quantum Filter**: Implements photon-dark-photon kinetic mixing and von Neumann evolution
+- **Dark-Mode Leakage Detection**: Reveals quantum entanglement signatures of stealth objects
+- **Blue-Halo Fusion Visualization**: RGB composite highlighting stealth signatures
+- **Synthetic Test Generator**: Creates realistic radar scenarios with configurable stealth targets
+- **Streamlit Web Interface**: Interactive parameter tuning and real-time visualization
 
-## 📝 Licensing
-This project uses a **Dual-License model**:
+## Installation
 
-- **Commercial License**: Required for for-profit, enterprise, or corporate use.
-- **Open Academic & Personal License**: Free for academic research, public study, and personal exploration.
-
-See the `LICENSE` file for details.
-
-Badge:
-```
-![License: Dual License](https://img.shields.io/badge/license-Dual--License-blue)
-```
-
----
-
-## 🤝 Contributing
-Pull requests are welcome.
-For major changes, open an issue to discuss your proposal.
-
-A Contributor License Agreement (CLA) may be required for future releases.
-
----
-
-## 📫 Contact
-Author: **Tony E. Ford**  
-Independent Researcher / Astrophysics & Quantum Systems
+```bash
+git clone https://github.com/tlcagford/StealthPDPRadar.git
+cd StealthPDPRadar
+pip install -r requirements.txt
