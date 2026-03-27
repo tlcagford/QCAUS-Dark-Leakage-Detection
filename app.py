@@ -1,5 +1,5 @@
 """
-StealthPDPRadar - COMPLETE WORKING VERSION
+StealthPDPRadar - FIXED WITH WORKING THRESHOLD
 """
 
 import streamlit as st
@@ -19,7 +19,7 @@ OPTIMAL_OMEGA = 0.72
 OPTIMAL_FRINGE = 1.75
 OPTIMAL_ENTANGLEMENT = 0.44
 OPTIMAL_MIXING = 0.17
-OPTIMAL_THRESHOLD = 0.48
+OPTIMAL_THRESHOLD = 0.35  # Lowered for better detection
 
 # ============================================================================
 # SIDEBAR
@@ -42,7 +42,7 @@ with st.sidebar:
     stealth = st.slider("Stealth Level", 0.0, 1.0, 0.15)
     noise = st.slider("Noise Level", 0.0, 0.3, 0.12)
     
-    generate = st.button("🔄 Generate", type="primary", use_container_width=True)
+    generate = st.button("🔄 Generate Radar Data", type="primary", use_container_width=True)
 
 # ============================================================================
 # FUNCTIONS
@@ -60,15 +60,25 @@ def generate_radar(range_km, azimuth_deg, stealth, noise):
     rcs = 10.0 * (1 - stealth)
     snr = rcs / (range_km**2 + 10)
     
+    # Add target with Gaussian shape
     for dr in range(-12, 13):
         for da in range(-10, 11):
             rr = r_idx + dr
             aa = (az_idx + da) % az_bins
             if 0 <= rr < range_bins:
                 dist = np.sqrt(dr**2 + da**2)
-                radar[rr, aa] += snr * np.exp(-dist**2 / 30)
+                radar[rr, aa] += snr * np.exp(-dist**2 / 30) * np.random.uniform(0.8, 1.2)
     
+    # Add clutter and noise
+    radar += np.random.weibull(1.5, (range_bins, az_bins)) * 0.08
     radar += np.random.randn(range_bins, az_bins) * noise
+    
+    # Range attenuation
+    for r in range(range_bins):
+        r_km = r / range_bins * max_range
+        radar[r, :] *= 1 / (1 + (r_km / 70)**2)
+    
+    # Normalize
     radar = (radar - radar.min()) / (radar.max() - radar.min() + 1e-8)
     
     return radar, r_idx, az_idx, rcs
@@ -112,36 +122,43 @@ def pdp_filter(radar, omega, fringe, mixing, entangle):
     return dark, residuals, prob, rgb
 
 def detect_targets(prob, threshold):
+    """Detect stealth targets using the threshold"""
     binary = prob > threshold
     labeled, num = label(binary)
     
     detections = []
     for i in range(1, num + 1):
         mask = (labeled == i)
-        if np.sum(mask) > 30:
+        if np.sum(mask) > 20:  # Min size filter
             com = center_of_mass(prob, labeled, i)
             confidence = np.mean(prob[mask])
-            detections.append({'center': com, 'confidence': confidence})
+            detections.append({
+                'center': com,
+                'confidence': confidence,
+                'size': np.sum(mask)
+            })
     return detections
 
 # ============================================================================
 # MAIN
 # ============================================================================
 
+# Generate data
 if generate or 'radar' not in st.session_state:
-    radar, r_idx, az_idx, rcs = generate_radar(target_range, target_azimuth, stealth, noise)
-    dark, residuals, prob, fusion = pdp_filter(radar, omega, fringe, mixing, entanglement)
-    detections = detect_targets(prob, threshold)
-    
-    st.session_state.radar = radar
-    st.session_state.dark = dark
-    st.session_state.residuals = residuals
-    st.session_state.prob = prob
-    st.session_state.fusion = fusion
-    st.session_state.detections = detections
-    st.session_state.r_idx = r_idx
-    st.session_state.az_idx = az_idx
-    st.session_state.rcs = rcs
+    with st.spinner("Generating radar data..."):
+        radar, r_idx, az_idx, rcs = generate_radar(target_range, target_azimuth, stealth, noise)
+        dark, residuals, prob, fusion = pdp_filter(radar, omega, fringe, mixing, entanglement)
+        detections = detect_targets(prob, threshold)  # Uses the current threshold
+        
+        st.session_state.radar = radar
+        st.session_state.dark = dark
+        st.session_state.residuals = residuals
+        st.session_state.prob = prob
+        st.session_state.fusion = fusion
+        st.session_state.detections = detections
+        st.session_state.r_idx = r_idx
+        st.session_state.az_idx = az_idx
+        st.session_state.rcs = rcs
 else:
     radar = st.session_state.radar
     dark = st.session_state.dark
@@ -160,20 +177,21 @@ else:
 st.title("🔍 Stealth Photon-Dark-Photon Quantum Radar")
 st.markdown("*Spectral duality filter revealing dark-mode leakage in radar returns*")
 
-# Metrics
+# Metrics row
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Target RCS", f"{rcs:.4f} m²")
 c2.metric("Detections", len(detections))
 c3.metric("Max P", f"{np.max(prob):.3f}")
-c4.metric("Ω", f"{omega:.2f}")
+c4.metric("Threshold", f"{threshold:.2f}")
 
 # Main plot
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 extent = [0, 360, 300, 0]
 
+# Left: Radar with overlay
 ax1.imshow(radar, aspect='auto', cmap='viridis', extent=extent)
 ax1.plot(target_azimuth, target_range, 'ro', markersize=14,
-         markeredgecolor='white', markeredgewidth=2, label='Target')
+         markeredgecolor='white', markeredgewidth=2, label='Stealth Target')
 
 for d in detections:
     r = d['center'][0] / 256 * 300
@@ -181,7 +199,8 @@ for d in detections:
     from matplotlib.patches import Rectangle
     rect = Rectangle((az - 12, r - 12), 24, 24, linewidth=3, edgecolor='lime', facecolor='none')
     ax1.add_patch(rect)
-    ax1.text(az - 8, r - 18, f"{d['confidence']:.2f}", color='lime', fontsize=9,
+    ax1.text(az - 8, r - 18, f"{d['confidence']:.2f}", 
+             color='lime', fontsize=9, weight='bold',
              bbox=dict(boxstyle='round', facecolor='black', alpha=0.7))
 
 ax1.set_xlabel("Azimuth (deg)")
@@ -190,6 +209,7 @@ ax1.set_title("📡 Radar with Detection Overlay")
 ax1.legend()
 plt.colorbar(ax1.images[0], ax=ax1)
 
+# Right: Probability map
 ax2.imshow(prob, aspect='auto', cmap='hot', extent=extent, vmin=0, vmax=1)
 for d in detections:
     r = d['center'][0] / 256 * 300
@@ -206,11 +226,16 @@ plt.colorbar(ax2.images[0], ax=ax2)
 plt.tight_layout()
 st.pyplot(fig)
 
-# Metrics
+# ============================================================================
+# DETECTION METRICS - USING ACTUAL THRESHOLD
+# ============================================================================
+
+# Create ground truth mask
 gt_mask = np.zeros((256, 360), dtype=bool)
 gt_mask[max(0, r_idx-15):min(256, r_idx+15), 
         max(0, az_idx-15):min(360, az_idx+15)] = True
 
+# Use the current threshold for detection
 detections_binary = prob > threshold
 tp = np.sum(detections_binary & gt_mask)
 fp = np.sum(detections_binary & ~gt_mask)
@@ -226,17 +251,37 @@ col_a.metric("Precision", f"{precision:.3f}")
 col_b.metric("Recall", f"{recall:.3f}")
 col_c.metric("F1 Score", f"{f1:.3f}")
 
+# Status message
 if f1 > 0.6:
-    st.success(f"✅ EXCELLENT! F1 = {f1:.3f}")
+    st.success(f"✅ EXCELLENT! F1 = {f1:.3f} - Stealth target detected!")
 elif f1 > 0.3:
     st.warning(f"⚠️ GOOD - F1 = {f1:.3f}")
+elif tp > 0:
+    st.info(f"✅ Target detected! F1 = {f1:.3f} - Try lowering threshold to 0.30-0.35 for better precision")
 else:
-    st.info(f"💡 Using optimal: Ω={OPTIMAL_OMEGA}, Threshold={OPTIMAL_THRESHOLD}")
+    st.info(f"💡 Try lowering threshold to 0.30-0.35")
+
+# Show detection info
+if detections:
+    with st.expander("📋 Detected Targets"):
+        for d in detections:
+            st.write(f"- Range: {d['center'][0]/256*300:.1f} km, Azimuth: {d['center'][1]/360*360:.1f}°, Confidence: {d['confidence']:.3f}")
+
+# Ground truth
+with st.expander("📋 Ground Truth"):
+    st.dataframe(pd.DataFrame([{
+        'Type': 'Stealth Target',
+        'Range (km)': target_range,
+        'Azimuth (deg)': target_azimuth,
+        'RCS (m²)': f"{rcs:.4f}",
+        'Stealth Level': f"{stealth*100:.0f}%"
+    }]))
 
 st.markdown("---")
 st.markdown(f"""
-<div style="text-align: center;">
+<div style="text-align: center; color: #4CAF50;">
     ✅ <b>OPTIMAL SETTINGS</b> | Ω={omega:.2f} | Fringe={fringe:.2f} | ε={mixing:.2f} | Threshold={threshold:.2f}<br>
+    Detections: {len(detections)} | F1 Score: {f1:.3f}<br>
     © 2026 Tony E. Ford | QCAUS Framework
 </div>
 """, unsafe_allow_html=True)
