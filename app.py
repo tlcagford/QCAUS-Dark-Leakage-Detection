@@ -20,8 +20,8 @@ st.markdown("Spectral duality filter revealing dark-mode leakage in radar return
 
 with st.sidebar:
     st.header("⚙️ PDP Filter Parameters")
-    omega = st.slider("Ω (Entanglement Strength)", 0.0, 1.0, 0.6, 0.01)
-    fringe_scale = st.slider("Fringe Scale", 0.1, 5.0, 1.2, 0.1)
+    omega = st.slider("Ω (Entanglement Strength)", 0.0, 1.0, 0.7, 0.01)
+    fringe_scale = st.slider("Fringe Scale", 0.1, 5.0, 1.5, 0.1)
     entanglement_strength = st.slider("Quantum Entanglement", 0.0, 1.0, 0.4, 0.01)
     mixing_angle = st.slider("ε (Mixing Angle)", 0.0, 0.5, 0.15, 0.01)
     
@@ -90,7 +90,7 @@ def generate_radar_image(target_range_km, target_azimuth_deg, rcs_reduction, noi
     radar = radar - np.min(radar)
     radar = radar / (np.max(radar) + 1e-8)
     
-    # Add a marker for visualization (optional)
+    # Add a marker for visualization
     radar[target_range_idx-2:target_range_idx+3, target_az_idx-2:target_az_idx+3] += 0.3
     
     return radar, target_range_idx, target_az_idx, target_rcs
@@ -141,16 +141,16 @@ def apply_pdp_filter(radar_image, omega, fringe_scale, mixing_angle, entanglemen
     # Step 3: Stealth Probability
     stealth_prob = dark_mode * residuals
     stealth_prob = stealth_prob / (np.max(stealth_prob) + 1e-8)
-    stealth_prob = np.clip(stealth_prob * 2, 0, 1)  # Enhance contrast
+    stealth_prob = np.clip(stealth_prob * 2, 0, 1)
     
     # Step 4: Fusion Visualization
     def norm(x):
         return (x - np.min(x)) / (np.max(x) - np.min(x) + 1e-8)
     
     rgb = np.zeros((*radar_image.shape, 3))
-    rgb[..., 0] = norm(radar_image)      # Red: original radar
-    rgb[..., 1] = norm(residuals)        # Green: entanglement residuals
-    rgb[..., 2] = norm(dark_mode)        # Blue: dark-mode leakage
+    rgb[..., 0] = norm(radar_image)
+    rgb[..., 1] = norm(residuals)
+    rgb[..., 2] = norm(dark_mode)
     rgb = np.power(np.clip(rgb, 0, 1), 0.5)
     
     return dark_mode, residuals, stealth_prob, rgb
@@ -309,7 +309,7 @@ with st.expander("📖 About the PDP Quantum Radar Filter"):
     
     ### Current Detection Performance
     
-    - **Stealth Target RCS**: ~{:.3f} m² (reduced from normal 10 m²)
+    - **Stealth Target RCS**: {:.3f} m² (reduced from normal 10 m²)
     - **Detection Threshold**: Probability > 0.4
     - **Filter Response**: Dark-mode leakage reveals target at predicted location
     
