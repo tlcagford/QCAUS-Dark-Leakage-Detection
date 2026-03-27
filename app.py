@@ -1,5 +1,6 @@
 """
-StealthPDPRadar - WORKING SYNTHETIC TEST
+StealthPDPRadar - ENHANCED WITH DETECTION DATA INCORPORATION
+Saves and exports all PDP filter results
 """
 
 import streamlit as st
@@ -69,7 +70,6 @@ def identify_aircraft_type(callsign):
 # ============================================================================
 
 def fetch_opensky_real(lat, lon, radius):
-    """Fetch real aircraft data"""
     try:
         bbox = (lat - radius, lat + radius, lon - radius, lon + radius)
         url = "https://opensky-network.org/api/states/all"
@@ -213,23 +213,84 @@ def detect_targets(prob, threshold):
     return detections
 
 # ============================================================================
-# EXPORT FUNCTIONS
+# ENHANCED EXPORT FUNCTIONS - INCORPORATES ALL DETECTION DATA
 # ============================================================================
 
-def export_to_csv(aircraft_df):
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_data = aircraft_df.to_csv(index=False)
-    return csv_data, f"stealth_radar_data_{timestamp}.csv"
-
-def export_to_json(aircraft_df, parameters):
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    export_data = {
+def export_complete_data(aircraft_df, detections, prob, radar_image, parameters, timestamp):
+    """Export complete detection data including PDP filter results"""
+    
+    # Convert detections to DataFrame
+    detections_data = []
+    for d in detections:
+        r_km = d['center'][0] / 256 * 300
+        az_deg = d['center'][1] / 360 * 360
+        detections_data.append({
+            'detection_id': len(detections_data) + 1,
+            'range_km': round(r_km, 1),
+            'azimuth_deg': round(az_deg, 1),
+            'confidence': round(d['confidence'], 4),
+            'size_pixels': d['size']
+        })
+    
+    detections_df = pd.DataFrame(detections_data) if detections_data else pd.DataFrame()
+    
+    # Calculate stealth probability statistics
+    prob_stats = {
+        'max_probability': float(np.max(prob)),
+        'mean_probability': float(np.mean(prob)),
+        'std_probability': float(np.std(prob)),
+        'total_detections': len(detections)
+    }
+    
+    # Create complete export package
+    export_package = {
         'timestamp': timestamp,
         'parameters': parameters,
-        'aircraft_detections': aircraft_df.to_dict('records')
+        'detection_summary': prob_stats,
+        'aircraft_data': aircraft_df.to_dict('records') if aircraft_df is not None else [],
+        'pdp_detections': detections_data,
+        'stealth_probability_stats': prob_stats
     }
-    json_data = json.dumps(export_data, indent=2)
-    return json_data, f"stealth_radar_data_{timestamp}.json"
+    
+    return export_package
+
+def export_to_csv_complete(aircraft_df, detections):
+    """Export aircraft and detection data to CSV"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Aircraft CSV
+    if aircraft_df is not None and len(aircraft_df) > 0:
+        aircraft_csv = aircraft_df.to_csv(index=False)
+        aircraft_filename = f"stealth_radar_aircraft_{timestamp}.csv"
+    else:
+        aircraft_csv = None
+        aircraft_filename = None
+    
+    # Detections CSV
+    detections_data = []
+    for d in detections:
+        r_km = d['center'][0] / 256 * 300
+        az_deg = d['center'][1] / 360 * 360
+        detections_data.append({
+            'detection_id': len(detections_data) + 1,
+            'range_km': r_km,
+            'azimuth_deg': az_deg,
+            'confidence': d['confidence'],
+            'size_pixels': d['size']
+        })
+    
+    detections_df = pd.DataFrame(detections_data)
+    detections_csv = detections_df.to_csv(index=False)
+    detections_filename = f"stealth_radar_detections_{timestamp}.csv"
+    
+    return aircraft_csv, detections_csv, aircraft_filename, detections_filename
+
+def export_to_json_complete(aircraft_df, detections, prob, parameters, timestamp):
+    """Export complete data to JSON"""
+    export_package = export_complete_data(aircraft_df, detections, prob, None, parameters, timestamp)
+    json_data = json.dumps(export_package, indent=2)
+    filename = f"stealth_radar_complete_{timestamp}.json"
+    return json_data, filename
 
 def get_image_download_link(fig, filename):
     buf = io.BytesIO()
@@ -244,7 +305,6 @@ def get_image_download_link(fig, filename):
 # ============================================================================
 
 def generate_synthetic_test(target_range, target_azimuth, stealth_level):
-    """Generate clean synthetic test data with one stealth target"""
     range_bins, az_bins = 256, 360
     max_range = 300
     
@@ -253,11 +313,9 @@ def generate_synthetic_test(target_range, target_azimuth, stealth_level):
     r_idx = int(target_range / max_range * (range_bins - 1))
     az_idx = int(target_azimuth / 360 * (az_bins - 1))
     
-    # Calculate RCS based on stealth level
     rcs = 10.0 * (1 - stealth_level)
     snr = rcs / (target_range**2 + 10)
     
-    # Add Gaussian target
     for dr in range(-12, 13):
         for da in range(-10, 11):
             rr = r_idx + dr
@@ -266,10 +324,8 @@ def generate_synthetic_test(target_range, target_azimuth, stealth_level):
                 dist = np.sqrt(dr**2 + da**2)
                 radar[rr, aa] += snr * np.exp(-dist**2 / 30)
     
-    # Normalize
     radar = (radar - radar.min()) / (radar.max() - radar.min() + 1e-8)
     
-    # Create aircraft dataframe
     stealth_level_text = "Very High" if stealth_level > 0.8 else "High" if stealth_level > 0.5 else "Medium" if stealth_level > 0.2 else "Low"
     
     aircraft_list = [{
@@ -285,7 +341,7 @@ def generate_synthetic_test(target_range, target_azimuth, stealth_level):
         'rcs_m2': round(rcs, 4)
     }]
     
-    return radar, pd.DataFrame(aircraft_list), r_idx, az_idx
+    return radar, pd.DataFrame(aircraft_list), r_idx, az_idx, rcs
 
 # ============================================================================
 # SIDEBAR
@@ -312,10 +368,8 @@ with st.sidebar:
     
     if data_source == "OpenSky Live":
         st.subheader("📍 Radar Location")
-        st.markdown("**🇺🇸 USA:**")
-        st.caption("DEN: 39.85, -104.67 | Nellis: 36.24, -115.04 | Langley: 37.08, -76.36")
-        st.markdown("**🌍 Global:**")
-        st.caption("Moscow: 55.76, 37.62 | Beijing: 39.90, 116.40 | London: 51.47, -0.45")
+        st.markdown("**🇺🇸 USA:** DEN: 39.85, -104.67 | Nellis: 36.24, -115.04")
+        st.markdown("**🌍 Global:** Moscow: 55.76, 37.62 | Beijing: 39.90, 116.40")
         
         radar_lat = st.number_input("Latitude", value=39.85, format="%.2f")
         radar_lon = st.number_input("Longitude", value=-104.67, format="%.2f")
@@ -324,14 +378,13 @@ with st.sidebar:
     
     elif data_source == "Synthetic Test":
         st.subheader("🎯 Synthetic Test")
-        st.caption("For testing PDP filter with simulated targets")
         target_range = st.slider("Target Range (km)", 50, 250, 150)
         target_azimuth = st.slider("Target Azimuth (deg)", 0, 360, 180)
         stealth_level = st.slider("Stealth Level", 0.0, 1.0, 0.15)
         generate = st.button("🔄 Generate", type="primary", use_container_width=True)
     
-    st.header("📤 Export")
-    export_format = st.selectbox("Format", ["CSV", "JSON", "PNG"])
+    st.header("📤 Export Detection Data")
+    export_type = st.selectbox("Export Type", ["Complete JSON", "Aircraft CSV", "Detections CSV", "PNG Image"])
     export_button = st.button("💾 Export", type="secondary", use_container_width=True)
 
 # ============================================================================
@@ -346,12 +399,12 @@ status_msg = ""
 # Synthetic Test
 if data_source == "Synthetic Test":
     if generate or 'radar_synthetic' not in st.session_state:
-        radar_image, aircraft_df, r_idx, az_idx = generate_synthetic_test(target_range, target_azimuth, stealth_level)
-        target_info = (target_range, target_azimuth, r_idx, az_idx, 10.0 * (1 - stealth_level))
+        radar_image, aircraft_df, r_idx, az_idx, rcs = generate_synthetic_test(target_range, target_azimuth, stealth_level)
+        target_info = (target_range, target_azimuth, r_idx, az_idx, rcs)
         st.session_state.radar_synthetic = radar_image
         st.session_state.aircraft_synthetic = aircraft_df
         st.session_state.target_info = target_info
-        status_msg = "Synthetic test scenario - 1 stealth target"
+        status_msg = f"Synthetic test: {target_range}km, {target_azimuth}°, RCS={rcs:.4f}m²"
     else:
         radar_image = st.session_state.radar_synthetic
         aircraft_df = st.session_state.aircraft_synthetic
@@ -361,7 +414,7 @@ if data_source == "Synthetic Test":
 # OpenSky Live
 elif data_source == "OpenSky Live":
     if 'fetch_opensky' in locals() and fetch_opensky:
-        with st.spinner("Fetching real aircraft data from OpenSky..."):
+        with st.spinner("Fetching real aircraft data..."):
             radar_image, aircraft_df, status_msg = fetch_opensky_real(radar_lat, radar_lon, radius)
             if radar_image is not None:
                 st.session_state.radar = radar_image
@@ -372,9 +425,6 @@ elif data_source == "OpenSky Live":
             radar_image = st.session_state.radar
             aircraft_df = st.session_state.aircraft
             target_info = None
-        else:
-            radar_image = None
-            aircraft_df = None
 
 # Display status
 if status_msg:
@@ -385,7 +435,7 @@ if status_msg:
     else:
         st.sidebar.info(status_msg)
 
-# Apply PDP filter if we have radar data
+# Apply PDP filter
 if radar_image is not None:
     with st.spinner("Applying PDP quantum filter..."):
         dark, residuals, prob, fusion = pdp_filter(radar_image, omega, fringe, mixing, entanglement)
@@ -402,46 +452,42 @@ st.title("🔍 Stealth Photon-Dark-Photon Quantum Radar")
 st.markdown("*Quantum detection of low-observable targets*")
 
 # Metrics
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Data Source", data_source)
 c2.metric("Aircraft", len(aircraft_df) if aircraft_df is not None else 0)
 c3.metric("PDP Detections", len(detections))
 c4.metric("Max P", f"{np.max(prob):.3f}" if prob is not None else "N/A")
+c5.metric("Threshold", f"{threshold:.2f}")
 
 # Show warning if no data
 if radar_image is None:
     st.warning("""
     ### ⚠️ No Radar Data Available
     
-    **OpenSky API is currently timing out.** This is normal - the free API has rate limits.
+    **OpenSky API is currently timing out.** 
     
     **Try these options:**
     1. **Switch to "Synthetic Test"** mode to test the PDP filter
     2. **Wait 30 seconds** and click "Fetch Live Data" again
     3. **Try different coordinates** (Denver area is often busy)
-    4. **Try during daytime hours** when more aircraft are flying
     """)
     
     if st.button("🚀 Switch to Synthetic Test Mode"):
-        st.session_state.data_source = "Synthetic Test"
         st.rerun()
 
-# Display radar plots if we have data
+# Display radar plots
 elif radar_image is not None:
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
     extent = [0, 360, 300, 0]
 
-    # Left: Radar with overlay
     ax1.imshow(radar_image, aspect='auto', cmap='viridis', extent=extent)
     
-    # Add ground truth target for synthetic test
     if target_info:
         target_range, target_azimuth, r_idx, az_idx, rcs = target_info
         ax1.plot(target_azimuth, target_range, 'ro', markersize=14,
                 markeredgecolor='white', markeredgewidth=2, label='Target')
         ax1.legend()
     
-    # Add aircraft markers
     if aircraft_df is not None and len(aircraft_df) > 0:
         for _, row in aircraft_df.iterrows():
             color = 'red' if row.get('stealth_level') in ['Very High', 'High'] else 'blue'
@@ -449,7 +495,6 @@ elif radar_image is not None:
             ax1.plot(row['azimuth_deg'], row['range_km'], marker=marker, color=color,
                     markersize=8, markeredgecolor='white', markeredgewidth=1, alpha=0.7)
     
-    # Add detection boxes
     for d in detections:
         r = d['center'][0] / 256 * 300
         az = d['center'][1] / 360 * 360
@@ -464,7 +509,6 @@ elif radar_image is not None:
     ax1.set_title("📡 Radar with Detection Overlay")
     plt.colorbar(ax1.images[0], ax=ax1)
     
-    # Right: Probability map
     ax2.imshow(prob, aspect='auto', cmap='hot', extent=extent, vmin=0, vmax=1)
     for d in detections:
         r = d['center'][0] / 256 * 300
@@ -484,7 +528,7 @@ elif radar_image is not None:
     plt.tight_layout()
     st.pyplot(fig)
     
-    # Aircraft Table (with correct column names)
+    # Aircraft Table
     if aircraft_df is not None and len(aircraft_df) > 0:
         st.subheader("✈️ Aircraft Detections")
         
@@ -495,12 +539,10 @@ elif radar_image is not None:
         stealth_count = len(aircraft_df[aircraft_df['stealth_level'].isin(['Very High', 'High'])])
         col3.metric("Stealth Capable", stealth_count)
         
-        # Use correct column names
         display_columns = ['callsign', 'aircraft_name', 'aircraft_type', 'country', 'stealth_level', 'range_km', 'azimuth_deg', 'rcs_m2']
         available_columns = [col for col in display_columns if col in aircraft_df.columns]
         display_df = aircraft_df[available_columns].head(20)
         
-        # Rename for display
         rename_map = {
             'callsign': 'Callsign',
             'aircraft_name': 'Aircraft',
@@ -514,6 +556,22 @@ elif radar_image is not None:
         display_df = display_df.rename(columns=rename_map)
         st.dataframe(display_df, use_container_width=True)
     
+    # PDP Detections Table
+    if detections:
+        st.subheader("🎯 PDP Filter Detections")
+        detections_data = []
+        for i, d in enumerate(detections):
+            r_km = d['center'][0] / 256 * 300
+            az_deg = d['center'][1] / 360 * 360
+            detections_data.append({
+                'ID': i + 1,
+                'Range (km)': round(r_km, 1),
+                'Azimuth (°)': round(az_deg, 1),
+                'Confidence': round(d['confidence'], 3),
+                'Size (pixels)': d['size']
+            })
+        st.dataframe(pd.DataFrame(detections_data), use_container_width=True)
+    
     # Fusion and components
     st.subheader("🌀 Blue-Halo IR Fusion")
     fig_fusion, ax_fusion = plt.subplots(figsize=(12, 3))
@@ -522,7 +580,6 @@ elif radar_image is not None:
     ax_fusion.set_ylabel("Range (km)")
     st.pyplot(fig_fusion)
     
-    # Components
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("🌑 Dark-Mode Leakage")
@@ -534,23 +591,60 @@ elif radar_image is not None:
         fig_res, ax_res = plt.subplots(figsize=(8, 4))
         ax_res.imshow(residuals, aspect='auto', cmap='Greens')
         st.pyplot(fig_res)
+    
+    # Detection Performance Metrics
+    if target_info and detections:
+        target_range, target_azimuth, r_idx, az_idx, rcs = target_info
+        # Find closest detection to target
+        closest_dist = min([np.sqrt((d['center'][0] - r_idx)**2 + (d['center'][1] - az_idx)**2) for d in detections])
+        best_confidence = max([d['confidence'] for d in detections])
+        
+        st.subheader("📊 Detection Performance")
+        col_a, col_b, col_c = st.columns(3)
+        col_a.metric("Detection Distance", f"{closest_dist:.1f} pixels", "Lower is better")
+        col_b.metric("Best Confidence", f"{best_confidence:.3f}", ">0.5 = good")
+        col_c.metric("Target RCS", f"{rcs:.4f} m²", f"{stealth_level*100:.0f}% stealth")
+        
+        if closest_dist < 20 and best_confidence > 0.5:
+            st.success("✅ STEALTH TARGET SUCCESSFULLY DETECTED!")
+        elif closest_dist < 30:
+            st.warning("⚠️ Partial detection - try adjusting threshold")
+        else:
+            st.info("💡 Try lowering threshold or adjusting Ω parameter")
 
-# Export
-if export_button and aircraft_df is not None and len(aircraft_df) > 0:
-    params = {'omega': omega, 'fringe': fringe, 'entanglement': entanglement, 'mixing': mixing, 'threshold': threshold}
-    if export_format == "CSV":
-        csv_data, filename = export_to_csv(aircraft_df)
-        st.download_button("📥 Download CSV", csv_data, filename, "text/csv")
-    elif export_format == "JSON":
-        json_data, filename = export_to_json(aircraft_df, params)
-        st.download_button("📥 Download JSON", json_data, filename, "application/json")
-    elif export_format == "PNG" and radar_image is not None:
+# ============================================================================
+# EXPORT HANDLING
+# ============================================================================
+
+if export_button and radar_image is not None:
+    timestamp = datetime.now().isoformat()
+    params = {
+        'omega': omega, 'fringe': fringe, 'entanglement': entanglement,
+        'mixing': mixing, 'threshold': threshold, 'timestamp': timestamp
+    }
+    
+    if export_type == "Complete JSON":
+        json_data, filename = export_to_json_complete(aircraft_df, detections, prob, params, timestamp)
+        st.download_button("📥 Download Complete JSON", json_data, filename, "application/json")
+        
+    elif export_type == "Aircraft CSV" and aircraft_df is not None and len(aircraft_df) > 0:
+        csv_data, detections_csv, aircraft_filename, detections_filename = export_to_csv_complete(aircraft_df, detections)
+        if csv_data:
+            st.download_button("📥 Download Aircraft CSV", csv_data, aircraft_filename, "text/csv")
+        
+    elif export_type == "Detections CSV" and detections:
+        csv_data, detections_csv, aircraft_filename, detections_filename = export_to_csv_complete(aircraft_df, detections)
+        if detections_csv:
+            st.download_button("📥 Download Detections CSV", detections_csv, detections_filename, "text/csv")
+        
+    elif export_type == "PNG Image":
         st.markdown(get_image_download_link(fig, f"stealth_radar_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"), unsafe_allow_html=True)
 
 st.markdown("---")
 st.markdown(f"""
 <div style="text-align: center; color: #888;">
-    <b>Stealth PDP Radar</b> | Ω={omega:.2f} | Fringe={fringe:.2f} | ε={mixing:.2f}<br>
+    <b>Stealth PDP Radar</b> | Ω={omega:.2f} | Fringe={fringe:.2f} | ε={mixing:.2f} | Threshold={threshold:.2f}<br>
+    <b>PDP Detections:</b> {len(detections)} | <b>Export Ready</b> | All detection data saved<br>
     © 2026 Tony E. Ford | QCAUS Framework
 </div>
 """, unsafe_allow_html=True)
