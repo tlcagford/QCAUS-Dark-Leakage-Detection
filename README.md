@@ -1,5 +1,6 @@
 # StealthPDPRadar
 
+Live app: https://stealthpdpradar.streamlit.app/
 ## Photon-Dark-Photon Quantum Radar for Stealth Detection
 
 Spectral duality filter that extracts green-speck entanglement residuals and blue-halo IR fusion to detect stealth objects by revealing dark-mode leakage in ordinary radar returns.
