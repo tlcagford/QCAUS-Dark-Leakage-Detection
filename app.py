@@ -1,6 +1,6 @@
 """
-StealthPDPRadar v3.1 – FINAL WORKING VERSION
-Live radar | PDP quantum filter | No errors
+StealthPDPRadar v3.2 – Manual Coordinate Control
+Live radar with adjustable target position
 """
 
 import streamlit as st
@@ -13,14 +13,13 @@ import pandas as pd
 import time
 from datetime import datetime
 import warnings
-import random
 
 warnings.filterwarnings('ignore')
 
 # ── PAGE CONFIG ─────────────────────────────────────────────
 st.set_page_config(
     layout="wide",
-    page_title="StealthPDPRadar v3.1",
+    page_title="StealthPDPRadar v3.2",
     page_icon="🛸",
     initial_sidebar_state="expanded"
 )
@@ -46,6 +45,12 @@ st.markdown("""
         50% { opacity: 0.3; }
         100% { opacity: 1; }
     }
+    .coord-input {
+        background-color: #1a1a3a;
+        padding: 10px;
+        border-radius: 8px;
+        margin: 5px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -62,6 +67,9 @@ class LiveRadarSimulator:
         self.timestamp = None
         self.detection_history = []
         self.scan_count = 0
+        self.manual_mode = False
+        self.manual_x = range_km * 0.3
+        self.manual_y = range_km * 0.2
         
         # RCS models
         self.rcs_factors = {
@@ -71,6 +79,16 @@ class LiveRadarSimulator:
             "HQ-19": 0.005,
             "Kinzhal": 0.01
         }
+    
+    def set_manual_coords(self, x_km, y_km):
+        """Set manual target coordinates"""
+        self.manual_mode = True
+        self.manual_x = np.clip(x_km, -self.range_km, self.range_km)
+        self.manual_y = np.clip(y_km, -self.range_km, self.range_km)
+    
+    def set_auto_mode(self):
+        """Switch back to automatic moving target"""
+        self.manual_mode = False
     
     def generate_scan(self):
         """Generate a single radar scan frame"""
@@ -82,10 +100,15 @@ class LiveRadarSimulator:
         y = np.linspace(-self.range_km, self.range_km, size)
         X, Y = np.meshgrid(x, y)
         
-        # Moving target (simulate motion)
-        t = time.time()
-        target_x = self.range_km * (0.3 + 0.1 * np.sin(t / 10))
-        target_y = self.range_km * (0.2 + 0.05 * np.cos(t / 15))
+        # Determine target position
+        if self.manual_mode:
+            target_x = self.manual_x
+            target_y = self.manual_y
+        else:
+            # Automatic moving target
+            t = time.time()
+            target_x = self.range_km * (0.3 + 0.1 * np.sin(t / 10))
+            target_y = self.range_km * (0.2 + 0.05 * np.cos(t / 15))
         
         # Conventional radar return
         distance = np.sqrt((X - target_x)**2 + (Y - target_y)**2)
@@ -107,7 +130,8 @@ class LiveRadarSimulator:
             'target_type': self.target_type,
             'timestamp': datetime.now(),
             'range_km': self.range_km,
-            'scan_number': self.scan_count
+            'scan_number': self.scan_count,
+            'manual_mode': self.manual_mode
         }
     
     def update(self):
@@ -120,7 +144,9 @@ class LiveRadarSimulator:
         self.detection_history.append({
             'timestamp': self.timestamp,
             'confidence': confidence,
-            'scan_number': self.scan_count
+            'scan_number': self.scan_count,
+            'target_x': self.current_data['target_position'][0],
+            'target_y': self.current_data['target_position'][1]
         })
         if len(self.detection_history) > 20:
             self.detection_history.pop(0)
@@ -168,8 +194,8 @@ def detect_targets(dark_mode_leakage, threshold=0.1):
     return targets
 
 
-def generate_synthetic_data(target, range_km, size=200):
-    """Generate synthetic radar scene"""
+def generate_synthetic_data(target, range_km, target_x=None, target_y=None, size=200):
+    """Generate synthetic radar scene with optional manual coordinates"""
     rcs_factors = {"F-35": 0.001, "B-21": 0.0005, "NGAD": 0.0003, "HQ-19": 0.005, "Kinzhal": 0.01}
     rcs = rcs_factors.get(target.split()[0], 0.001)
     
@@ -177,8 +203,10 @@ def generate_synthetic_data(target, range_km, size=200):
     y = np.linspace(-range_km, range_km, size)
     X, Y = np.meshgrid(x, y)
     
-    target_x = range_km * 0.3
-    target_y = range_km * 0.2
+    if target_x is None or target_y is None:
+        target_x = range_km * 0.3
+        target_y = range_km * 0.2
+    
     distance = np.sqrt((X - target_x)**2 + (Y - target_y)**2)
     
     conventional = rcs * np.exp(-distance**2 / (2 * (range_km/8)**2))
@@ -192,7 +220,7 @@ def generate_synthetic_data(target, range_km, size=200):
 
 # ── SIDEBAR ─────────────────────────────────────────────
 with st.sidebar:
-    st.title("🛸 StealthPDPRadar v3.1")
+    st.title("🛸 StealthPDPRadar v3.2")
     st.markdown("*Live PDP Quantum Radar*")
     st.markdown("---")
     
@@ -205,7 +233,7 @@ with st.sidebar:
     
     if data_mode == "🟢 LIVE Radar Stream":
         st.markdown('<span class="live-indicator"></span> **LIVE MODE ACTIVE**', unsafe_allow_html=True)
-        st.caption("Real-time radar simulation running")
+        st.caption("Real-time radar simulation")
     
     st.markdown("---")
     
@@ -229,14 +257,33 @@ with st.sidebar:
     
     if data_mode == "🟢 LIVE Radar Stream":
         update_interval = st.slider("Update Interval (s)", 0.5, 5.0, 1.0)
+        
+        st.markdown("---")
+        st.markdown("### 🎮 Target Movement")
+        
+        movement_mode = st.radio(
+            "Movement Mode",
+            ["🤖 Auto (Moving Target)", "✋ Manual (Set Coordinates)"]
+        )
+        
+        if movement_mode == "✋ Manual (Set Coordinates)":
+            col_x, col_y = st.columns(2)
+            with col_x:
+                manual_x = st.number_input("X Coordinate (km)", value=int(range_km * 0.3), step=10, format="%d")
+            with col_y:
+                manual_y = st.number_input("Y Coordinate (km)", value=int(range_km * 0.2), step=10, format="%d")
+            
+            manual_x = np.clip(manual_x, -range_km, range_km)
+            manual_y = np.clip(manual_y, -range_km, range_km)
+        
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
-            if st.button("▶️ Start", use_container_width=True):
+            if st.button("▶️ Start Stream", use_container_width=True):
                 st.session_state.live_active = True
                 if 'live_simulator' not in st.session_state:
                     st.session_state.live_simulator = LiveRadarSimulator(target, range_km)
         with col_btn2:
-            if st.button("⏹️ Stop", use_container_width=True):
+            if st.button("⏹️ Stop Stream", use_container_width=True):
                 st.session_state.live_active = False
     
     if data_mode == "📁 Upload File":
@@ -246,8 +293,8 @@ with st.sidebar:
         )
     
     st.markdown("---")
-    st.caption("Tony Ford | StealthPDPRadar v3.1")
-    st.caption("Live radar | PDP quantum filter | Stealth detection")
+    st.caption("Tony Ford | StealthPDPRadar v3.2")
+    st.caption("Manual coordinate control available in Live Mode")
 
 
 # ── INITIALIZE SESSION STATE ─────────────────────────────────────────────
@@ -289,6 +336,7 @@ detection_confidence = 0
 conventional_strength = 0
 quantum_signature = 0
 enhancement_gain = 0
+current_target_pos = None
 
 # LIVE Radar Stream
 if data_mode == "🟢 LIVE Radar Stream":
@@ -301,28 +349,40 @@ if data_mode == "🟢 LIVE Radar Stream":
         st.session_state.live_simulator.target_type = target
         st.session_state.live_simulator.range_km = range_km
         
+        # Apply manual coordinates if in manual mode
+        if movement_mode == "✋ Manual (Set Coordinates)":
+            st.session_state.live_simulator.set_manual_coords(manual_x, manual_y)
+            st.info(f"📍 **Manual Target Position:** X = {manual_x} km, Y = {manual_y} km")
+        else:
+            st.session_state.live_simulator.set_auto_mode()
+            st.caption("🤖 Target moving automatically")
+        
         # Generate new scan
         radar_data = st.session_state.live_simulator.update()
         radar_return = radar_data['data']
         timestamp = radar_data['timestamp']
+        current_target_pos = radar_data['target_position']
         
         # Store history
         st.session_state.radar_history.append({
             'timestamp': timestamp,
             'confidence': np.max(radar_return),
-            'scan_number': radar_data['scan_number']
+            'scan_number': radar_data['scan_number'],
+            'target_x': current_target_pos[0],
+            'target_y': current_target_pos[1]
         })
         if len(st.session_state.radar_history) > 20:
             st.session_state.radar_history.pop(0)
         
         # Show live indicator
-        st.caption(f"🟢 **LIVE** | Scan #{radar_data['scan_number']} | {timestamp.strftime('%H:%M:%S')}")
+        mode_text = "MANUAL" if radar_data['manual_mode'] else "AUTO"
+        st.caption(f"🟢 **LIVE** | Mode: {mode_text} | Scan #{radar_data['scan_number']} | {timestamp.strftime('%H:%M:%S')}")
         
         # Auto-refresh
         time.sleep(update_interval)
         st.rerun()
     else:
-        st.warning("🟡 **Click 'Start' to begin live radar data acquisition**")
+        st.warning("🟡 **Click 'Start Stream' to begin live radar data acquisition**")
         # Generate placeholder for display
         radar_return = generate_synthetic_data(target, range_km)
         timestamp = datetime.now()
@@ -354,8 +414,20 @@ elif data_mode == "📁 Upload File" and 'uploaded_file' in locals() and uploade
 
 # Synthetic Demo Mode
 elif data_mode == "🌌 Synthetic Demo":
-    radar_return = generate_synthetic_data(target, range_km)
+    # Allow manual coordinates in demo mode too
+    st.markdown("### 🎯 Target Position")
+    col_x, col_y = st.columns(2)
+    with col_x:
+        demo_x = st.number_input("X (km)", value=int(range_km * 0.3), step=10, format="%d", key="demo_x")
+    with col_y:
+        demo_y = st.number_input("Y (km)", value=int(range_km * 0.2), step=10, format="%d", key="demo_y")
+    
+    demo_x = np.clip(demo_x, -range_km, range_km)
+    demo_y = np.clip(demo_y, -range_km, range_km)
+    
+    radar_return = generate_synthetic_data(target, range_km, demo_x, demo_y)
     timestamp = datetime.now()
+    current_target_pos = (demo_x, demo_y)
 
 
 # ── PROCESS WITH PDP FILTER (if data exists) ─────────────────────────────────────────────
@@ -373,7 +445,6 @@ st.markdown("### 📡 Radar Detection")
 
 col1, col2, col3 = st.columns(3)
 
-# Function to safely display plots
 def safe_display_plot(fig):
     st.pyplot(fig)
     plt.close(fig)
@@ -423,6 +494,10 @@ with col3:
     ax.tick_params(colors='white')
     safe_display_plot(fig)
     st.caption("🌈 Blue-halo fusion - target detected")
+
+# Show target coordinates
+if current_target_pos is not None:
+    st.caption(f"📍 **Target Position:** X = {current_target_pos[0]:.1f} km, Y = {current_target_pos[1]:.1f} km")
 
 
 # ── DETECTION METRICS ─────────────────────────────────────────────
@@ -494,14 +569,16 @@ with col_e2:
         "range_km": range_km,
         "detection_confidence": detection_confidence,
         "quantum_signature": float(quantum_signature),
-        "mode": data_mode
+        "mode": data_mode,
+        "target_position": current_target_pos
     }
     st.download_button("📋 Export Metadata", json.dumps(metadata, indent=2), "radar_metadata.json", width='stretch')
 
 with col_e3:
     if data_mode == "🟢 LIVE Radar Stream" and st.session_state.radar_history:
         history_data = json.dumps([
-            {'timestamp': str(h['timestamp']), 'confidence': float(h['confidence']), 'scan': h['scan_number']}
+            {'timestamp': str(h['timestamp']), 'confidence': float(h['confidence']), 
+             'scan': h['scan_number'], 'target_x': h['target_x'], 'target_y': h['target_y']}
             for h in st.session_state.radar_history
         ], indent=2)
         st.download_button("📊 Export History", history_data, "detection_history.json", width='stretch')
@@ -512,7 +589,9 @@ with st.expander("📖 How It Works – PDP Quantum Radar"):
     st.markdown(r"""
     ### Photon-Dark-Photon Quantum Radar
     
-    **Live Mode:** Real-time radar simulation with moving targets
+    **Live Mode:** Real-time radar simulation with **manual coordinate control**
+    
+    **Manual Control:** Set target X/Y coordinates to test different scenarios
     
     **Physics:** Conventional radar detects reflected photons. Stealth aircraft minimize this.
     
@@ -530,4 +609,4 @@ with st.expander("📖 How It Works – PDP Quantum Radar"):
     """)
 
 st.markdown("---")
-st.markdown("🛸 **StealthPDPRadar v3.1** | Live Radar | PDP Quantum Filter | Tony Ford Model")
+st.markdown("🛸 **StealthPDPRadar v3.2** | Manual Coordinate Control | Live Radar | Tony Ford Model")
