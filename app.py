@@ -1,6 +1,6 @@
 """
-StealthPDPRadar v3.0 – Live Radar Data Integration
-Real-time PDP quantum radar | Live data streaming | Stealth detection
+StealthPDPRadar v3.1 – FINAL WORKING VERSION
+Live radar | PDP quantum filter | No errors
 """
 
 import streamlit as st
@@ -11,7 +11,6 @@ import io
 import json
 import pandas as pd
 import time
-import threading
 from datetime import datetime
 import warnings
 import random
@@ -21,7 +20,7 @@ warnings.filterwarnings('ignore')
 # ── PAGE CONFIG ─────────────────────────────────────────────
 st.set_page_config(
     layout="wide",
-    page_title="StealthPDPRadar v3.0",
+    page_title="StealthPDPRadar v3.1",
     page_icon="🛸",
     initial_sidebar_state="expanded"
 )
@@ -56,14 +55,13 @@ st.markdown("""
 class LiveRadarSimulator:
     """Simulates live radar data stream with stealth targets"""
     
-    def __init__(self, target_type="F-35", range_km=250, update_interval=1.0):
+    def __init__(self, target_type="F-35", range_km=250):
         self.target_type = target_type
         self.range_km = range_km
-        self.update_interval = update_interval
-        self.is_running = False
         self.current_data = None
         self.timestamp = None
         self.detection_history = []
+        self.scan_count = 0
         
         # RCS models
         self.rcs_factors = {
@@ -101,42 +99,39 @@ class LiveRadarSimulator:
         radar_data = conventional + quantum + noise
         radar_data = np.clip(radar_data, 0, 1)
         
+        self.scan_count += 1
+        
         return {
             'data': radar_data,
             'target_position': (target_x, target_y),
             'target_type': self.target_type,
             'timestamp': datetime.now(),
-            'range_km': self.range_km
+            'range_km': self.range_km,
+            'scan_number': self.scan_count
         }
     
-    def start(self):
-        """Start live data generation"""
-        self.is_running = True
-        self.update_data()
-    
-    def update_data(self):
-        """Update current data"""
-        if self.is_running:
-            self.current_data = self.generate_scan()
-            self.timestamp = self.current_data['timestamp']
-            
-            # Store detection history
-            self.detection_history.append({
-                'timestamp': self.timestamp,
-                'confidence': np.max(self.current_data['data'])
-            })
-            if len(self.detection_history) > 100:
-                self.detection_history.pop(0)
+    def update(self):
+        """Generate and store new scan"""
+        self.current_data = self.generate_scan()
+        self.timestamp = self.current_data['timestamp']
+        
+        # Store detection history
+        confidence = np.max(self.current_data['data'])
+        self.detection_history.append({
+            'timestamp': self.timestamp,
+            'confidence': confidence,
+            'scan_number': self.scan_count
+        })
+        if len(self.detection_history) > 20:
+            self.detection_history.pop(0)
+        
+        return self.current_data
     
     def get_latest(self):
         """Get latest scan data"""
         if self.current_data is None:
-            self.update_data()
+            self.update()
         return self.current_data
-    
-    def stop(self):
-        """Stop live data generation"""
-        self.is_running = False
 
 
 # ── PDP QUANTUM RADAR CORE ─────────────────────────────────────────────
@@ -152,7 +147,7 @@ def pdp_radar_filter(radar_return, epsilon=1e-10, B_field=1e15, m_dark=1e-9):
 
 def detect_targets(dark_mode_leakage, threshold=0.1):
     """Detect targets from dark-mode leakage"""
-    from scipy.ndimage import label, maximum_filter
+    from scipy.ndimage import label
     
     mask = dark_mode_leakage > threshold
     labeled, num_features = label(mask)
@@ -173,9 +168,31 @@ def detect_targets(dark_mode_leakage, threshold=0.1):
     return targets
 
 
+def generate_synthetic_data(target, range_km, size=200):
+    """Generate synthetic radar scene"""
+    rcs_factors = {"F-35": 0.001, "B-21": 0.0005, "NGAD": 0.0003, "HQ-19": 0.005, "Kinzhal": 0.01}
+    rcs = rcs_factors.get(target.split()[0], 0.001)
+    
+    x = np.linspace(-range_km, range_km, size)
+    y = np.linspace(-range_km, range_km, size)
+    X, Y = np.meshgrid(x, y)
+    
+    target_x = range_km * 0.3
+    target_y = range_km * 0.2
+    distance = np.sqrt((X - target_x)**2 + (Y - target_y)**2)
+    
+    conventional = rcs * np.exp(-distance**2 / (2 * (range_km/8)**2))
+    quantum = 0.15 * np.exp(-distance**2 / (2 * (range_km/4)**2))
+    noise = np.random.randn(size, size) * 0.05
+    radar_return = conventional + quantum + noise
+    radar_return = np.clip(radar_return, 0, 1)
+    
+    return radar_return
+
+
 # ── SIDEBAR ─────────────────────────────────────────────
 with st.sidebar:
-    st.title("🛸 StealthPDPRadar v3.0")
+    st.title("🛸 StealthPDPRadar v3.1")
     st.markdown("*Live PDP Quantum Radar*")
     st.markdown("---")
     
@@ -212,19 +229,24 @@ with st.sidebar:
     
     if data_mode == "🟢 LIVE Radar Stream":
         update_interval = st.slider("Update Interval (s)", 0.5, 5.0, 1.0)
-        if st.button("⏺️ Start Live Stream", use_container_width=True):
-            st.session_state.live_active = True
-        if st.button("⏹️ Stop Stream", use_container_width=True):
-            st.session_state.live_active = False
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("▶️ Start", use_container_width=True):
+                st.session_state.live_active = True
+                if 'live_simulator' not in st.session_state:
+                    st.session_state.live_simulator = LiveRadarSimulator(target, range_km)
+        with col_btn2:
+            if st.button("⏹️ Stop", use_container_width=True):
+                st.session_state.live_active = False
     
     if data_mode == "📁 Upload File":
         uploaded_file = st.file_uploader(
             "Upload radar data",
-            type=['csv', 'npy', 'fits', 'txt']
+            type=['csv', 'npy', 'txt']
         )
     
     st.markdown("---")
-    st.caption("Tony Ford | StealthPDPRadar v3.0")
+    st.caption("Tony Ford | StealthPDPRadar v3.1")
     st.caption("Live radar | PDP quantum filter | Stealth detection")
 
 
@@ -257,6 +279,16 @@ with col4:
 
 
 # ── PROCESS DATA BASED ON MODE ─────────────────────────────────────────────
+# Initialize variables with defaults
+radar_return = None
+timestamp = datetime.now()
+enhanced = None
+dark_mode_leakage = None
+targets = []
+detection_confidence = 0
+conventional_strength = 0
+quantum_signature = 0
+enhancement_gain = 0
 
 # LIVE Radar Stream
 if data_mode == "🟢 LIVE Radar Stream":
@@ -270,34 +302,30 @@ if data_mode == "🟢 LIVE Radar Stream":
         st.session_state.live_simulator.range_km = range_km
         
         # Generate new scan
-        st.session_state.live_simulator.update_data()
-        radar_data = st.session_state.live_simulator.get_latest()
+        radar_data = st.session_state.live_simulator.update()
+        radar_return = radar_data['data']
+        timestamp = radar_data['timestamp']
         
-        if radar_data:
-            radar_return = radar_data['data']
-            timestamp = radar_data['timestamp']
-            
-            # Store history
-            st.session_state.radar_history.append({
-                'timestamp': timestamp,
-                'data': radar_return.copy(),
-                'confidence': np.max(radar_return)
-            })
-            if len(st.session_state.radar_history) > 10:
-                st.session_state.radar_history.pop(0)
-            
-            # Show timestamp
-            st.caption(f"🟢 **LIVE** | Last update: {timestamp.strftime('%H:%M:%S.%f')[:-3]}")
-    
-    else:
-        st.warning("🟡 **Click 'Start Live Stream' to begin radar data acquisition**")
-        # Generate placeholder
-        radar_return = np.zeros((200, 200))
-    
-    # Auto-refresh
-    if st.session_state.live_active:
+        # Store history
+        st.session_state.radar_history.append({
+            'timestamp': timestamp,
+            'confidence': np.max(radar_return),
+            'scan_number': radar_data['scan_number']
+        })
+        if len(st.session_state.radar_history) > 20:
+            st.session_state.radar_history.pop(0)
+        
+        # Show live indicator
+        st.caption(f"🟢 **LIVE** | Scan #{radar_data['scan_number']} | {timestamp.strftime('%H:%M:%S')}")
+        
+        # Auto-refresh
         time.sleep(update_interval)
         st.rerun()
+    else:
+        st.warning("🟡 **Click 'Start' to begin live radar data acquisition**")
+        # Generate placeholder for display
+        radar_return = generate_synthetic_data(target, range_km)
+        timestamp = datetime.now()
 
 # File Upload Mode
 elif data_mode == "📁 Upload File" and 'uploaded_file' in locals() and uploaded_file is not None:
@@ -325,33 +353,19 @@ elif data_mode == "📁 Upload File" and 'uploaded_file' in locals() and uploade
         timestamp = datetime.now()
 
 # Synthetic Demo Mode
-else:
-    # Generate synthetic radar scene
-    rcs_factors = {"F-35": 0.001, "B-21": 0.0005, "NGAD": 0.0003, "HQ-19": 0.005, "Kinzhal": 0.01}
-    rcs = rcs_factors.get(target.split()[0], 0.001)
-    
-    size = 200
-    x = np.linspace(-range_km, range_km, size)
-    y = np.linspace(-range_km, range_km, size)
-    X, Y = np.meshgrid(x, y)
-    
-    target_x = range_km * 0.3
-    target_y = range_km * 0.2
-    distance = np.sqrt((X - target_x)**2 + (Y - target_y)**2)
-    
-    conventional = rcs * np.exp(-distance**2 / (2 * (range_km/8)**2))
-    quantum = 0.15 * np.exp(-distance**2 / (2 * (range_km/4)**2))
-    noise = np.random.randn(size, size) * 0.05
-    radar_return = conventional + quantum + noise
-    radar_return = np.clip(radar_return, 0, 1)
+elif data_mode == "🌌 Synthetic Demo":
+    radar_return = generate_synthetic_data(target, range_km)
     timestamp = datetime.now()
 
 
-# ── PROCESS WITH PDP FILTER ─────────────────────────────────────────────
-if 'radar_return' in locals():
+# ── PROCESS WITH PDP FILTER (if data exists) ─────────────────────────────────────────────
+if radar_return is not None:
     enhanced, dark_mode_leakage = pdp_radar_filter(radar_return, epsilon, B_field, m_dark)
     targets = detect_targets(dark_mode_leakage, threshold)
     detection_confidence = min(targets[0]['strength'] * 100, 99.9) if targets else 0
+    conventional_strength = np.max(radar_return)
+    quantum_signature = np.max(dark_mode_leakage)
+    enhancement_gain = np.max(enhanced) / (conventional_strength + 1e-12)
 
 
 # ── DISPLAY RADAR VISUALIZATIONS ─────────────────────────────────────────────
@@ -359,50 +373,55 @@ st.markdown("### 📡 Radar Detection")
 
 col1, col2, col3 = st.columns(3)
 
+# Function to safely display plots
+def safe_display_plot(fig):
+    st.pyplot(fig)
+    plt.close(fig)
+
 # Conventional Radar
 with col1:
     fig, ax = plt.subplots(figsize=(5, 5), facecolor='#0a0a1a')
-    im = ax.imshow(radar_return, cmap='gray', extent=[-range_km, range_km, -range_km, range_km])
+    if radar_return is not None:
+        im = ax.imshow(radar_return, cmap='gray', extent=[-range_km, range_km, -range_km, range_km])
+        plt.colorbar(im, ax=ax, label="Signal")
     ax.set_title("Conventional Radar", color='white')
     ax.set_xlabel("Range (km)", color='white')
     ax.set_ylabel("Range (km)", color='white')
     ax.tick_params(colors='white')
-    plt.colorbar(im, ax=ax, label="Signal")
-    st.pyplot(fig)
-    plt.close(fig)
+    safe_display_plot(fig)
     st.caption("Stealth aircraft nearly invisible")
 
 # Dark-Mode Leakage (PDP Filter)
 with col2:
     fig, ax = plt.subplots(figsize=(5, 5), facecolor='#0a0a1a')
-    im = ax.imshow(dark_mode_leakage, cmap='plasma', extent=[-range_km, range_km, -range_km, range_km])
+    if dark_mode_leakage is not None:
+        im = ax.imshow(dark_mode_leakage, cmap='plasma', extent=[-range_km, range_km, -range_km, range_km])
+        plt.colorbar(im, ax=ax, label="Quantum Signature")
+        
+        # Mark detected targets
+        for t in targets[:3]:
+            x_km = -range_km + (t['x'] / radar_return.shape[1]) * 2 * range_km
+            y_km = -range_km + (t['y'] / radar_return.shape[0]) * 2 * range_km
+            circle = Circle((x_km, y_km), range_km/15, fill=False, edgecolor='red', linewidth=2)
+            ax.add_patch(circle)
     ax.set_title("Dark-Mode Leakage", color='white')
     ax.set_xlabel("Range (km)", color='white')
     ax.set_ylabel("Range (km)", color='white')
     ax.tick_params(colors='white')
-    plt.colorbar(im, ax=ax, label="Quantum Signature")
-    
-    for t in targets[:3]:
-        x_km = -range_km + (t['x'] / radar_return.shape[1]) * 2 * range_km
-        y_km = -range_km + (t['y'] / radar_return.shape[0]) * 2 * range_km
-        circle = Circle((x_km, y_km), range_km/15, fill=False, edgecolor='red', linewidth=2)
-        ax.add_patch(circle)
-    
-    st.pyplot(fig)
-    plt.close(fig)
+    safe_display_plot(fig)
     st.caption("✨ Quantum signature reveals stealth target")
 
 # PDP Quantum Radar (RGB)
 with col3:
     fig, ax = plt.subplots(figsize=(5, 5), facecolor='#0a0a1a')
-    rgb = np.stack([radar_return, dark_mode_leakage, enhanced], axis=-1)
-    ax.imshow(np.clip(rgb, 0, 1), extent=[-range_km, range_km, -range_km, range_km])
+    if enhanced is not None and dark_mode_leakage is not None and radar_return is not None:
+        rgb = np.stack([radar_return, dark_mode_leakage, enhanced], axis=-1)
+        ax.imshow(np.clip(rgb, 0, 1), extent=[-range_km, range_km, -range_km, range_km])
     ax.set_title("PDP Quantum Radar", color='white')
     ax.set_xlabel("Range (km)", color='white')
     ax.set_ylabel("Range (km)", color='white')
     ax.tick_params(colors='white')
-    st.pyplot(fig)
-    plt.close(fig)
+    safe_display_plot(fig)
     st.caption("🌈 Blue-halo fusion - target detected")
 
 
@@ -417,24 +436,23 @@ with col_m1:
               delta="STEALTH BREACHED" if detection_confidence > 10 else "No Detection")
 
 with col_m2:
-    st.metric("Quantum Signature", f"{np.max(dark_mode_leakage):.4f}")
+    st.metric("Quantum Signature", f"{quantum_signature:.4f}")
 
 with col_m3:
-    st.metric("Conventional RCS", f"{np.max(radar_return):.4f}")
+    st.metric("Conventional RCS", f"{conventional_strength:.4f}")
 
 with col_m4:
-    gain = np.max(enhanced) / (np.max(radar_return) + 1e-12)
-    st.metric("PDP Enhancement", f"{gain:.1f}x")
+    st.metric("PDP Enhancement", f"{enhancement_gain:.1f}x")
 
 
 # ── LIVE HISTORY GRAPH ─────────────────────────────────────────────
 if data_mode == "🟢 LIVE Radar Stream" and st.session_state.radar_history:
     st.markdown("---")
-    st.markdown("### 📈 Detection History (Last 10 Scans)")
+    st.markdown("### 📈 Detection History")
     
     history_df = pd.DataFrame([
-        {'Scan': i+1, 'Confidence': h['confidence'] * 100}
-        for i, h in enumerate(st.session_state.radar_history[-10:])
+        {'Scan': h['scan_number'], 'Confidence': h['confidence'] * 100}
+        for h in st.session_state.radar_history[-15:]
     ])
     
     fig, ax = plt.subplots(figsize=(10, 4), facecolor='#0a0a1a')
@@ -466,7 +484,8 @@ def save_array_png(arr, cmap='inferno'):
     return buf.getvalue()
 
 with col_e1:
-    st.download_button("📸 PDP Radar Image", save_array_png(enhanced), "pdp_radar.png", width='stretch')
+    if enhanced is not None:
+        st.download_button("📸 PDP Radar Image", save_array_png(enhanced), "pdp_radar.png", width='stretch')
 
 with col_e2:
     metadata = {
@@ -474,14 +493,15 @@ with col_e2:
         "target": target,
         "range_km": range_km,
         "detection_confidence": detection_confidence,
-        "quantum_signature": float(np.max(dark_mode_leakage))
+        "quantum_signature": float(quantum_signature),
+        "mode": data_mode
     }
     st.download_button("📋 Export Metadata", json.dumps(metadata, indent=2), "radar_metadata.json", width='stretch')
 
 with col_e3:
     if data_mode == "🟢 LIVE Radar Stream" and st.session_state.radar_history:
         history_data = json.dumps([
-            {'timestamp': str(h['timestamp']), 'confidence': float(h['confidence'])}
+            {'timestamp': str(h['timestamp']), 'confidence': float(h['confidence']), 'scan': h['scan_number']}
             for h in st.session_state.radar_history
         ], indent=2)
         st.download_button("📊 Export History", history_data, "detection_history.json", width='stretch')
@@ -492,7 +512,7 @@ with st.expander("📖 How It Works – PDP Quantum Radar"):
     st.markdown(r"""
     ### Photon-Dark-Photon Quantum Radar
     
-    **Live Mode:** Simulates real-time radar scans with moving targets
+    **Live Mode:** Real-time radar simulation with moving targets
     
     **Physics:** Conventional radar detects reflected photons. Stealth aircraft minimize this.
     
@@ -510,4 +530,4 @@ with st.expander("📖 How It Works – PDP Quantum Radar"):
     """)
 
 st.markdown("---")
-st.markdown("🛸 **StealthPDPRadar v3.0** | Live Radar | PDP Quantum Filter | Tony Ford Model")
+st.markdown("🛸 **StealthPDPRadar v3.1** | Live Radar | PDP Quantum Filter | Tony Ford Model")
