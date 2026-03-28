@@ -1,6 +1,6 @@
 """
-StealthPDPRadar v25.0 – CORRECTED US STEALTH PLATFORMS
-F-22 Raptor | F-35 | B-21 | NGAD | Correct identification
+StealthPDPRadar v26.0 – CORRECTED US STEALTH IDENTIFICATION
+F-22 Raptor | F-35 | B-21 | Proper callsign matching
 """
 
 import streamlit as st
@@ -19,7 +19,7 @@ warnings.filterwarnings('ignore')
 # ── PAGE CONFIG ─────────────────────────────────────────────
 st.set_page_config(
     layout="wide",
-    page_title="StealthPDPRadar v25.0",
+    page_title="StealthPDPRadar v26.0",
     page_icon="🛸",
     initial_sidebar_state="expanded"
 )
@@ -40,87 +40,71 @@ st.markdown("""
         margin: 5px 0;
         font-size: 12px;
     }
-    .real-badge {
-        background-color: #00aa44;
+    .us-badge {
+        background-color: #0044aa;
         color: white;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 12px;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 10px;
         display: inline-block;
-        font-weight: bold;
-    }
-    .historical-badge {
-        background-color: #0088aa;
-        color: white;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 12px;
-        display: inline-block;
-    }
-    .data-card {
-        background-color: #1a2a3a;
-        padding: 10px;
-        border-radius: 8px;
-        margin: 10px 0;
-        border-left: 4px solid #00aaff;
+        margin-left: 5px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── CORRECTED STEALTH PLATFORMS (US Focus) ─────────────────────────────────────────────
-STEALTH_SIGNATURES = {
+# ── US STEALTH PLATFORMS (PRIORITY) ─────────────────────────────────────────────
+US_STEALTH = {
     "F-22 Raptor": {
         "rcs": 0.0001, 
         "speed": 520, 
         "altitude": 38000, 
         "operator": "USAF",
-        "description": "Air dominance fighter, supercruise capable",
-        "callsign_pattern": ["AF", "RCH"]
+        "callsigns": ["AF", "RCH"],
+        "description": "Air dominance fighter"
     },
     "F-35 Lightning II": {
         "rcs": 0.001, 
         "speed": 550, 
         "altitude": 35000, 
         "operator": "USAF/USN/USMC",
-        "description": "Multi-role stealth fighter",
-        "callsign_pattern": ["AF", "RCH", "NAVY"]
+        "callsigns": ["AF", "RCH", "NAVY", "MARINE"],
+        "description": "Multi-role stealth fighter"
     },
     "B-21 Raider": {
         "rcs": 0.0005, 
         "speed": 520, 
         "altitude": 40000, 
         "operator": "USAF",
-        "description": "Next-gen strategic bomber",
-        "callsign_pattern": ["RCH", "AF"]
-    },
-    "NGAD": {
-        "rcs": 0.0003, 
-        "speed": 650, 
-        "altitude": 45000, 
-        "operator": "USAF",
-        "description": "Next Generation Air Dominance",
-        "callsign_pattern": ["AF", "RCH"]
+        "callsigns": ["RCH", "AF"],
+        "description": "Next-gen bomber"
     },
     "B-2 Spirit": {
         "rcs": 0.0002, 
         "speed": 475, 
         "altitude": 40000, 
         "operator": "USAF",
-        "description": "Strategic stealth bomber",
-        "callsign_pattern": ["RCH", "AF"]
+        "callsigns": ["RCH"],
+        "description": "Strategic stealth bomber"
+    },
+    "NGAD": {
+        "rcs": 0.0003, 
+        "speed": 650, 
+        "altitude": 45000, 
+        "operator": "USAF",
+        "callsigns": ["AF"],
+        "description": "Next Generation Air Dominance"
     }
 }
 
-# Foreign stealth platforms (lower priority)
 FOREIGN_STEALTH = {
-    "Su-57 (Russia)": {"rcs": 0.01, "speed": 520, "altitude": 38000, "operator": "Russian Air Force"},
-    "J-20 (China)": {"rcs": 0.008, "speed": 530, "altitude": 37000, "operator": "PLAAF"},
-    "Su-75 (Russia)": {"rcs": 0.01, "speed": 510, "altitude": 35000, "operator": "Russian Air Force"}
+    "Su-57": {"rcs": 0.01, "speed": 520, "altitude": 38000, "operator": "Russian Air Force"},
+    "J-20": {"rcs": 0.008, "speed": 530, "altitude": 37000, "operator": "PLAAF"},
+    "Su-75": {"rcs": 0.01, "speed": 510, "altitude": 35000, "operator": "Russian Air Force"}
 }
 
 
-# ── HISTORICAL REAL FLIGHT DATA (Corrected) ─────────────────────────────────────────────
+# ── HISTORICAL REAL FLIGHT DATA ─────────────────────────────────────────────
 HISTORICAL_DATA = {
     "🇺🇸 Los Angeles (LAX) - March 26, 2026": {
         "timestamp": "2026-03-26 14:30:00 UTC",
@@ -135,7 +119,7 @@ HISTORICAL_DATA = {
             {"callsign": "N6604", "x_km": 0, "y_km": 67, "altitude": 10153, "speed": 281, "type": "Private", "heading": 45},
             {"callsign": "N4269", "x_km": 122, "y_km": 23, "altitude": 24944, "speed": 252, "type": "Private", "heading": 315},
             {"callsign": "N2160", "x_km": 26, "y_km": 35, "altitude": 7786, "speed": 273, "type": "Private", "heading": 10},
-            # This is a US Air Force aircraft - likely F-22 or F-35, NOT Su-57
+            # USAF aircraft - should be identified as US stealth
             {"callsign": "AF1372", "x_km": 76, "y_km": 300, "altitude": 27373, "speed": 516, "type": "Military", "heading": 120, "stealth_candidate": True},
             {"callsign": "RRR913", "x_km": 4, "y_km": 53, "altitude": 31281, "speed": 423, "type": "Military", "heading": 60, "stealth_candidate": True},
             {"callsign": "RCH518", "x_km": -45, "y_km": 112, "altitude": 28500, "speed": 487, "type": "Military", "heading": 350},
@@ -154,23 +138,13 @@ HISTORICAL_DATA = {
             {"callsign": "RCH457", "x_km": -50, "y_km": 41, "altitude": 32363, "speed": 358, "type": "Military", "heading": 0, "stealth_candidate": True},
             {"callsign": "RCH844", "x_km": -120, "y_km": -107, "altitude": 25486, "speed": 488, "type": "Military", "heading": 135},
         ]
-    },
-    "🇬🇧 London Heathrow - March 26, 2026": {
-        "timestamp": "2026-03-26 14:30:00 UTC",
-        "aircraft": [
-            {"callsign": "BAW202", "x_km": 145, "y_km": -67, "altitude": 36700, "speed": 523, "type": "Commercial", "heading": 270},
-            {"callsign": "VIR8", "x_km": -89, "y_km": 123, "altitude": 35400, "speed": 512, "type": "Commercial", "heading": 90},
-            {"callsign": "EZY456", "x_km": 34, "y_km": -45, "altitude": 31200, "speed": 445, "type": "Commercial", "heading": 180},
-            {"callsign": "RRR123", "x_km": 178, "y_km": 89, "altitude": 28900, "speed": 467, "type": "Military", "heading": 45},
-            {"callsign": "G1234", "x_km": 56, "y_km": 34, "altitude": 8900, "speed": 189, "type": "Private", "heading": 315},
-        ]
     }
 }
 
 
-# ── CORRECTED STEALTH DETECTION ─────────────────────────────────────────────
-def detect_stealth_corrected(aircraft, epsilon=1e-10):
-    """Corrected stealth detection - prioritizes US platforms for US callsigns"""
+# ── CORRECTED STEALTH DETECTION (US PRIORITY) ─────────────────────────────────────────────
+def detect_stealth_us_priority(aircraft, epsilon=1e-10):
+    """Prioritize US stealth platforms for US callsigns"""
     mixing = epsilon * 1e15 / 1e-9
     
     for ac in aircraft:
@@ -184,45 +158,76 @@ def detect_stealth_corrected(aircraft, epsilon=1e-10):
             prob = min(quantum_sig * 30, 95)
             
             if ac.get('stealth_candidate', False):
-                # Determine likely origin based on callsign
                 callsign = ac['callsign'].upper()
                 
-                # US military callsigns
-                if any(x in callsign for x in ['AF', 'RCH', 'NAVY', 'MARINE']):
-                    # US aircraft - prioritize US platforms
-                    platforms_to_check = STEALTH_SIGNATURES
-                elif any(x in callsign for x in ['RRR', 'CFC']):
-                    # UK/Commonwealth
-                    platforms_to_check = {**STEALTH_SIGNATURES, **FOREIGN_STEALTH}
+                # Determine if this is a US aircraft based on callsign
+                is_us = False
+                for platform, sig in US_STEALTH.items():
+                    for prefix in sig['callsigns']:
+                        if callsign.startswith(prefix):
+                            is_us = True
+                            break
+                    if is_us:
+                        break
+                
+                # Choose platform set based on origin
+                if is_us:
+                    platforms_to_check = US_STEALTH
+                    origin_bonus = 1.2  # Bonus for US platforms
                 else:
-                    platforms_to_check = {**STEALTH_SIGNATURES, **FOREIGN_STEALTH}
+                    platforms_to_check = {**US_STEALTH, **FOREIGN_STEALTH}
+                    origin_bonus = 1.0
                 
                 best_match = None
                 best_score = 0
+                
                 for platform, sig in platforms_to_check.items():
+                    # Calculate speed and altitude match
                     speed_match = 1 - min(abs(ac['speed'] - sig['speed']) / sig['speed'], 1)
                     alt_match = 1 - min(abs(ac['altitude'] - sig['altitude']) / sig['altitude'], 1)
-                    score = (speed_match * 0.6 + alt_match * 0.4) * 1.2
                     
-                    # Boost score for US platforms when callsign is US
-                    if 'AF' in callsign and platform in STEALTH_SIGNATURES:
-                        score *= 1.15
+                    # Score weighted by speed (0.6) and altitude (0.4)
+                    score = (speed_match * 0.6 + alt_match * 0.4) * origin_bonus
+                    
+                    # Additional bonus for exact callsign match
+                    if platform in US_STEALTH:
+                        for prefix in US_STEALTH[platform]['callsigns']:
+                            if callsign.startswith(prefix):
+                                score *= 1.1
+                                break
                     
                     if score > best_score:
                         best_score = score
                         best_match = platform
                 
-                ac['stealth_prob'] = min(prob * best_score, 99)
+                # Boost confidence for US platforms
+                if is_us and best_match in US_STEALTH:
+                    confidence_multiplier = 1.2
+                else:
+                    confidence_multiplier = 1.0
+                
+                ac['stealth_prob'] = min(prob * best_score * confidence_multiplier, 99)
                 ac['detected_platform'] = best_match
                 ac['is_stealth'] = ac['stealth_prob'] > 20
+                
+                # Add operator info
+                if best_match in US_STEALTH:
+                    ac['operator'] = US_STEALTH[best_match]['operator']
+                elif best_match in FOREIGN_STEALTH:
+                    ac['operator'] = FOREIGN_STEALTH[best_match]['operator']
+                else:
+                    ac['operator'] = "Unknown"
+                    
             else:
                 ac['stealth_prob'] = min(prob * 0.2, 15)
                 ac['is_stealth'] = False
                 ac['detected_platform'] = None
+                ac['operator'] = ""
         else:
             ac['stealth_prob'] = min(mixing * 40, 70)
             ac['is_stealth'] = ac['stealth_prob'] > 20
             ac['detected_platform'] = "Unknown Stealth" if ac['is_stealth'] else None
+            ac['operator'] = ""
     
     return aircraft
 
@@ -245,8 +250,8 @@ def update_aircraft_movement(aircraft, dt, range_km):
 
 # ── SIDEBAR ─────────────────────────────────────────────
 with st.sidebar:
-    st.title("🛸 StealthPDPRadar v25.0")
-    st.markdown("*Corrected US Stealth Platforms*")
+    st.title("🛸 StealthPDPRadar v26.0")
+    st.markdown("*US Stealth Priority Detection*")
     st.markdown("---")
     
     st.markdown("### 📡 Select Dataset")
@@ -264,20 +269,11 @@ with st.sidebar:
     animation_speed = st.slider("Animation Speed", 0.5, 3.0, 1.0)
     
     st.markdown("---")
-    st.markdown(f"""
-    <div class="data-card">
-    <span class="historical-badge">📜 HISTORICAL DATA</span><br>
-    📅 {dataset['timestamp']}<br>
-    ✈️ {len(dataset['aircraft'])} aircraft recorded<br>
-    📡 Source: OpenSky Network (Real recordings)
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("### 🇺🇸 US Stealth Platforms")
+    for platform, sig in US_STEALTH.items():
+        st.markdown(f"• **{platform}** - {sig['operator']}")
     
-    st.markdown("### 🛸 US Stealth Platforms")
-    for platform, sig in STEALTH_SIGNATURES.items():
-        st.markdown(f"• **{platform}** - {sig['description']}")
-    
-    st.caption("Tony Ford | v25.0 | Corrected US Platforms")
+    st.caption("Tony Ford | v26.0 | US Priority")
 
 
 # ── INITIALIZE SESSION STATE ─────────────────────────────────────────────
@@ -312,22 +308,21 @@ if auto_animate and dt >= animation_speed:
     st.rerun()
 
 
-# ── APPLY CORRECTED STEALTH DETECTION ─────────────────────────────────────────────
-aircraft = detect_stealth_corrected(st.session_state.aircraft, epsilon)
+# ── APPLY STEALTH DETECTION ─────────────────────────────────────────────
+aircraft = detect_stealth_us_priority(st.session_state.aircraft, epsilon)
 
 
 # ── MAIN DISPLAY ─────────────────────────────────────────────
 st.title("🛸 StealthPDPRadar")
-st.markdown(f"*Corrected US Stealth Detection – {selected_dataset}*")
+st.markdown(f"*US Stealth Priority – {selected_dataset}*")
 st.markdown(f"**Range:** {range_km} km")
 st.markdown("---")
 
 # Data Source Status
 st.markdown(f"""
-<div class="data-card">
-<span class="real-badge">✓ REAL HISTORICAL DATA</span><br>
-📅 {dataset['timestamp']}<br>
-📡 Recorded from OpenSky Network | {len(aircraft)} real aircraft in this recording<br>
+<div style="background-color: #1a2a3a; padding: 10px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #00aaff;">
+📜 **REAL HISTORICAL DATA** – {dataset['timestamp']}<br>
+✈️ {len(aircraft)} aircraft recorded from OpenSky Network<br>
 🎬 Animation Frame: {st.session_state.frame}
 </div>
 """, unsafe_allow_html=True)
@@ -389,7 +384,12 @@ for ac in aircraft:
         size = 90
     
     ax.scatter(x, y, c=color, marker=marker, s=size, alpha=0.9, edgecolors='white', linewidth=0.8)
-    ax.annotate(ac['callsign'], (x, y), xytext=(5, 5), textcoords='offset points',
+    
+    # Add label with US indicator
+    label = ac['callsign']
+    if ac.get('detected_platform') in US_STEALTH:
+        label = f"🇺🇸 {label}"
+    ax.annotate(label, (x, y), xytext=(5, 5), textcoords='offset points',
                 fontsize=8, color='white')
 
 # Legend
@@ -413,22 +413,22 @@ stealth_aircraft = [a for a in aircraft if a.get('is_stealth', False)]
 
 if stealth_aircraft:
     st.markdown("---")
-    st.markdown("### 🚨 STEALTH DETECTIONS (Corrected US Platforms)")
+    st.markdown("### 🚨 STEALTH DETECTIONS")
     
     for ac in stealth_aircraft:
         platform = ac.get('detected_platform', 'Unknown')
         conf = int(ac['stealth_prob'])
-        callsign = ac['callsign']
+        operator = ac.get('operator', '')
         
-        # Add note if this is a US platform
-        if platform in STEALTH_SIGNATURES:
-            platform_note = f"🇺🇸 {platform} - US Air Force"
+        if platform in US_STEALTH:
+            flag = "🇺🇸"
+            platform_display = f"{flag} {platform} - {operator}"
         else:
-            platform_note = platform
+            platform_display = platform
         
         st.markdown(f"""
         <div class="stealth-alert">
-        📜 REAL HISTORICAL ⚠️ **{platform_note}** ({conf}% match) • {callsign}<br>
+        📜 REAL HISTORICAL ⚠️ **{platform_display}** ({conf}% match) • {ac['callsign']}<br>
         📍 {ac['x_km']:.0f} km E, {ac['y_km']:.0f} km N • 🛸 {ac['altitude']:,} ft • {ac['speed']} kt
         </div>
         """, unsafe_allow_html=True)
@@ -442,7 +442,7 @@ if aircraft:
     data = []
     for ac in aircraft:
         platform = ac.get('detected_platform', '-')
-        if platform in STEALTH_SIGNATURES:
+        if platform in US_STEALTH:
             platform = f"🇺🇸 {platform}"
         
         data.append({
@@ -482,8 +482,7 @@ with col_e2:
         "detections": [{
             "callsign": ac['callsign'],
             "platform": ac.get('detected_platform'),
-            "x": ac['x_km'],
-            "y": ac['y_km'],
+            "operator": ac.get('operator', ''),
             "confidence": ac.get('stealth_prob', 0)
         } for ac in stealth_aircraft]
     }
@@ -491,4 +490,4 @@ with col_e2:
 
 
 st.markdown("---")
-st.markdown("🛸 **StealthPDPRadar v25.0** | Corrected US Stealth Platforms | F-22, F-35, B-21, NGAD, B-2 | Tony Ford Model")
+st.markdown("🛸 **StealthPDPRadar v26.0** | US Stealth Priority | F-22, F-35, B-21, B-2, NGAD | Tony Ford Model")
