@@ -1,6 +1,6 @@
 """
-StealthPDPRadar v4.1 – Fixed Dropdowns & Enhanced Controls
-Real-world location presets | Working menus | Stealth detection
+StealthPDPRadar v4.2 – Complete Working Version
+Real-world location presets | Full radar visualization | Stealth detection
 """
 
 import streamlit as st
@@ -10,7 +10,6 @@ from matplotlib.patches import Circle
 import io
 import json
 import pandas as pd
-import time
 from datetime import datetime
 import warnings
 
@@ -19,7 +18,7 @@ warnings.filterwarnings('ignore')
 # ── PAGE CONFIG ─────────────────────────────────────────────
 st.set_page_config(
     layout="wide",
-    page_title="StealthPDPRadar v4.1",
+    page_title="StealthPDPRadar v4.2",
     page_icon="🛸",
     initial_sidebar_state="expanded"
 )
@@ -32,19 +31,6 @@ st.markdown("""
     [data-testid="stMetricValue"] { color: #00aaff; }
     .stDownloadButton button { background-color: #00aaff; color: white; border-radius: 8px; }
     .stButton button { background-color: #00aaff; color: white; }
-    .live-indicator {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background-color: #ff4444;
-        animation: pulse 1s infinite;
-    }
-    @keyframes pulse {
-        0% { opacity: 1; }
-        50% { opacity: 0.3; }
-        100% { opacity: 1; }
-    }
     .location-card {
         background-color: #1a1a3a;
         padding: 10px;
@@ -52,12 +38,35 @@ st.markdown("""
         margin: 5px 0;
         border-left: 3px solid #00aaff;
     }
+    .detection-high {
+        background-color: #ff4444;
+        color: white;
+        padding: 5px;
+        border-radius: 5px;
+        text-align: center;
+        font-weight: bold;
+    }
+    .detection-medium {
+        background-color: #ffaa44;
+        color: black;
+        padding: 5px;
+        border-radius: 5px;
+        text-align: center;
+        font-weight: bold;
+    }
+    .detection-low {
+        background-color: #44ff44;
+        color: black;
+        padding: 5px;
+        border-radius: 5px;
+        text-align: center;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ── REAL-WORLD LOCATION DATABASE ─────────────────────────────────────────────
-# Defined as a simple list to ensure dropdown works
 LOCATION_NAMES = [
     "🇺🇸 Nellis AFB (NV, USA)",
     "🇺🇸 Edwards AFB (CA, USA)",
@@ -124,6 +133,17 @@ LOCATIONS = {
     }
 }
 
+# RCS factors for different stealth platforms
+RCS_FACTORS = {
+    "F-35 Lightning II": 0.001,
+    "B-21 Raider": 0.0005,
+    "NGAD": 0.0003,
+    "HQ-19": 0.005,
+    "Kinzhal": 0.01,
+    "Su-57": 0.01,
+    "J-20": 0.008,
+    "Drone": 0.02
+}
 
 # ── PDP QUANTUM RADAR CORE ─────────────────────────────────────────────
 
@@ -166,29 +186,18 @@ def generate_radar_data(location_name, range_km, target_x, target_y, target_type
     y = np.linspace(-range_km, range_km, size)
     X, Y = np.meshgrid(x, y)
     
-    # RCS based on target type
-    rcs_factors = {
-        "F-35 Lightning II": 0.001,
-        "B-21 Raider": 0.0005,
-        "NGAD": 0.0003,
-        "HQ-19": 0.005,
-        "Kinzhal": 0.01,
-        "Su-57": 0.01,
-        "J-20": 0.008,
-        "Drone": 0.02
-    }
-    rcs = rcs_factors.get(target_type, 0.001)
+    rcs = RCS_FACTORS.get(target_type, 0.001)
     
-    # Conventional radar return
+    # Conventional radar return (stealth target has very low RCS)
     distance = np.sqrt((X - target_x)**2 + (Y - target_y)**2)
     conventional = rcs * np.exp(-distance**2 / (2 * (range_km/8)**2))
     
-    # Quantum signature
-    quantum_strength = 0.15 * (1 / rcs) ** 0.3
+    # Quantum signature (PDP effect - stronger for stealthier targets)
+    quantum_strength = 0.15 * (1 / (rcs + 1e-12)) ** 0.25
     quantum = quantum_strength * np.exp(-distance**2 / (2 * (range_km/4)**2))
     
-    # Add noise
-    noise = np.random.randn(size, size) * 0.05
+    # Add realistic noise
+    noise = np.random.randn(size, size) * 0.03
     radar_data = conventional + quantum + noise
     radar_data = np.clip(radar_data, 0, 1)
     
@@ -197,14 +206,12 @@ def generate_radar_data(location_name, range_km, target_x, target_y, target_type
 
 # ── SIDEBAR ─────────────────────────────────────────────
 with st.sidebar:
-    st.title("🛸 StealthPDPRadar v4.1")
+    st.title("🛸 StealthPDPRadar v4.2")
     st.markdown("*Real-World Radar Detection*")
     st.markdown("---")
     
-    # Location Preset - FIXED DROPDOWN
+    # Location Preset
     st.markdown("### 🌍 Select Radar Station")
-    
-    # Simple selectbox with location names
     location_preset = st.selectbox(
         "Location",
         LOCATION_NAMES,
@@ -212,10 +219,8 @@ with st.sidebar:
         key="location_selector"
     )
     
-    # Get location info
     location_info = LOCATIONS[location_preset]
     
-    # Display location card
     st.markdown(f"""
     <div class="location-card">
     📍 **{location_preset}**<br>
@@ -227,20 +232,9 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Data source selection
-    st.markdown("### 📡 Data Source")
-    data_mode = st.radio(
-        "Mode",
-        ["🌌 Synthetic Demo", "📁 Upload File"],
-        index=0,
-        key="data_mode"
-    )
-    
-    st.markdown("---")
-    
     # Target selection
     st.markdown("### 🎯 Target")
-    target_options = ["F-35 Lightning II", "B-21 Raider", "NGAD", "HQ-19", "Kinzhal", "Su-57", "J-20", "Drone"]
+    target_options = list(RCS_FACTORS.keys())
     target = st.selectbox("Stealth Platform", target_options, index=0, key="target_selector")
     
     st.markdown("---")
@@ -251,13 +245,11 @@ with st.sidebar:
     
     st.markdown("---")
     st.markdown("### 📡 Radar Controls")
-    
-    # Use location's range as default
     range_km = st.slider("Range (km)", 50, 500, location_info['range_km'], key="range")
     threshold = st.slider("Detection Threshold", 0.01, 0.5, 0.1, key="threshold")
     
     st.markdown("---")
-    st.caption("Tony Ford | StealthPDPRadar v4.1")
+    st.caption("Tony Ford | StealthPDPRadar v4.2")
     st.caption("Real-world location presets | PDP quantum filter")
 
 
@@ -316,13 +308,13 @@ def safe_display_plot(fig):
 with col1:
     fig, ax = plt.subplots(figsize=(5, 5), facecolor='#0a0a1a')
     im = ax.imshow(radar_return, cmap='gray', extent=[-range_km, range_km, -range_km, range_km])
-    plt.colorbar(im, ax=ax, label="Signal")
-    ax.set_title(f"Conventional Radar\n{location_preset}", color='white', fontsize=10)
-    ax.set_xlabel("Range (km)", color='white')
-    ax.set_ylabel("Range (km)", color='white')
+    plt.colorbar(im, ax=ax, label="Signal Strength")
+    ax.set_title(f"Conventional Radar\n{location_preset.split()[0]}", color='white', fontsize=10)
+    ax.set_xlabel("Range East-West (km)", color='white')
+    ax.set_ylabel("Range North-South (km)", color='white')
     ax.tick_params(colors='white')
     safe_display_plot(fig)
-    st.caption("Stealth aircraft nearly invisible")
+    st.caption("⚪ Conventional radar sees almost nothing")
 
 # Dark-Mode Leakage (PDP Filter)
 with col2:
@@ -334,27 +326,29 @@ with col2:
     for t in targets[:3]:
         x_km = -range_km + (t['x'] / radar_return.shape[1]) * 2 * range_km
         y_km = -range_km + (t['y'] / radar_return.shape[0]) * 2 * range_km
-        circle = Circle((x_km, y_km), range_km/15, fill=False, edgecolor='red', linewidth=2)
+        circle = Circle((x_km, y_km), range_km/12, fill=False, edgecolor='red', linewidth=2)
         ax.add_patch(circle)
+        ax.text(x_km + 5, y_km + 5, f"Target {t['id']}", color='red', fontsize=8)
     
     ax.set_title(f"Dark-Mode Leakage\nPDP Quantum Filter", color='white', fontsize=10)
-    ax.set_xlabel("Range (km)", color='white')
-    ax.set_ylabel("Range (km)", color='white')
+    ax.set_xlabel("Range East-West (km)", color='white')
+    ax.set_ylabel("Range North-South (km)", color='white')
     ax.tick_params(colors='white')
     safe_display_plot(fig)
-    st.caption("✨ Quantum signature reveals stealth target")
+    st.caption("✨ PDP filter reveals stealth target via quantum signature")
 
-# PDP Quantum Radar (RGB)
+# PDP Quantum Radar (RGB Composite)
 with col3:
     fig, ax = plt.subplots(figsize=(5, 5), facecolor='#0a0a1a')
+    # RGB: R=conventional, G=dark-mode leakage, B=enhanced
     rgb = np.stack([radar_return, dark_mode_leakage, enhanced], axis=-1)
     ax.imshow(np.clip(rgb, 0, 1), extent=[-range_km, range_km, -range_km, range_km])
-    ax.set_title(f"PDP Quantum Radar\n{location_preset}", color='white', fontsize=10)
-    ax.set_xlabel("Range (km)", color='white')
-    ax.set_ylabel("Range (km)", color='white')
+    ax.set_title(f"PDP Quantum Radar\n{location_preset.split()[0]}", color='white', fontsize=10)
+    ax.set_xlabel("Range East-West (km)", color='white')
+    ax.set_ylabel("Range North-South (km)", color='white')
     ax.tick_params(colors='white')
     safe_display_plot(fig)
-    st.caption("🌈 Blue-halo fusion - target detected")
+    st.caption("🌈 Blue-halo fusion - target clearly visible")
 
 # Show target coordinates
 st.caption(f"📍 **Target Position:** X = {target_x:.1f} km, Y = {target_y:.1f} km")
@@ -367,8 +361,7 @@ st.markdown("### 🎯 Detection Analysis")
 col_m1, col_m2, col_m3, col_m4 = st.columns(4)
 
 with col_m1:
-    st.metric("Detection Confidence", f"{detection_confidence:.1f}%",
-              delta="STEALTH BREACHED" if detection_confidence > 10 else "No Detection")
+    st.metric("Detection Confidence", f"{detection_confidence:.1f}%")
 
 with col_m2:
     st.metric("Quantum Signature", f"{quantum_signature:.4f}")
@@ -379,15 +372,15 @@ with col_m3:
 with col_m4:
     st.metric("PDP Enhancement", f"{enhancement_gain:.1f}x")
 
-# Threat Assessment
+# Threat Assessment with colored box
 if detection_confidence > 50:
-    st.error(f"⚠️ **HIGH ALERT:** {target} detected at {range_km} km near {location_preset}!")
+    st.markdown(f'<div class="detection-high">⚠️ HIGH ALERT: {target} detected at {range_km} km near {location_preset}!</div>', unsafe_allow_html=True)
 elif detection_confidence > 20:
-    st.warning(f"⚠️ **MEDIUM ALERT:** Possible {target} signature detected near {location_preset}")
+    st.markdown(f'<div class="detection-medium">⚠️ MEDIUM ALERT: Possible {target} signature detected near {location_preset}</div>', unsafe_allow_html=True)
 elif detection_confidence > 5:
-    st.info(f"ℹ️ **LOW ALERT:** Weak quantum signature - investigate further")
+    st.markdown(f'<div class="detection-low">ℹ️ LOW ALERT: Weak quantum signature - investigate further</div>', unsafe_allow_html=True)
 else:
-    st.success(f"✅ **CLEAR:** No stealth signatures detected near {location_preset}")
+    st.markdown(f'<div class="detection-low">✅ CLEAR: No stealth signatures detected near {location_preset}</div>', unsafe_allow_html=True)
 
 
 # ── EXPORT ─────────────────────────────────────────────
@@ -406,7 +399,7 @@ def save_array_png(arr, cmap='inferno'):
     return buf.getvalue()
 
 with col_e1:
-    st.download_button("📸 PDP Radar Image", save_array_png(enhanced), f"pdp_radar_{location_preset.replace(' ', '_').replace('(', '').replace(')', '')}.png", width='stretch')
+    st.download_button("📸 PDP Radar Image", save_array_png(enhanced), f"pdp_radar_{location_preset.replace(' ', '_')}.png", width='stretch')
 
 with col_e2:
     metadata = {
@@ -417,45 +410,47 @@ with col_e2:
         "detection_confidence": detection_confidence,
         "quantum_signature": float(quantum_signature),
         "target_x": target_x,
-        "target_y": target_y
+        "target_y": target_y,
+        "rcs": RCS_FACTORS.get(target, 0.001)
     }
     st.download_button("📋 Export Metadata", json.dumps(metadata, indent=2), "radar_metadata.json", width='stretch')
 
 with col_e3:
-    # Export current radar data as CSV
     df_export = pd.DataFrame(radar_return)
     csv_data = df_export.to_csv(index=False).encode()
     st.download_button("📊 Export Radar Data", csv_data, f"radar_data_{location_preset.replace(' ', '_')}.csv", width='stretch')
 
 
-# ── THEORY ─────────────────────────────────────────────
+# ── THEORY EXPLANATION ─────────────────────────────────────────────
 with st.expander("📖 How It Works – PDP Quantum Radar"):
     st.markdown(r"""
     ### Photon-Dark-Photon Quantum Radar
     
     **Real-World Locations:** Simulates radar coverage at major air bases and test sites worldwide
     
+    **Physics:**
+    - Conventional radar: $P_{\text{conv}} \propto \text{RCS} \cdot e^{-(r/r_0)^2}$
+    - PDP quantum filter: $P(\gamma \to A') = (\varepsilon B / m')^2 \sin^2(m'^2 L / 4\omega)$
+    
     **Detection Chain:**
     1. Radar pulse transmitted from location
-    2. Photon-dark-photon mixing: $P(\gamma \to A') = (\varepsilon B / m')^2 \sin^2(m'^2 L / 4\omega)$
+    2. Photon-dark-photon mixing creates quantum signature
     3. Dark photons interact with stealth target
-    4. Unique quantum signature returned
-    5. PDP filter extracts signature
+    4. Unique quantum signature returns
+    5. PDP filter extracts signature from noise
     
     **Result:** Detection of stealth platforms at >250 km range
     
     ### Available Locations
-    - 🇺🇸 **Nellis AFB** – F-35 testing, Red Flag exercises
-    - 🇺🇸 **Edwards AFB** – B-21 Raider development
-    - 🇺🇸 **Area 51** – NGAD testing
-    - 🇬🇧 **RAF Lakenheath** – US F-35A in Europe
-    - 🇷🇺 **Akhtubinsk** – Russian Su-57 testing
-    - 🇨🇳 **Dingxin** – Chinese J-20 operations
-    - 🇮🇷 **Shahid Satari** – Missile/drone testing
-    - 🇰🇵 **Sohae** – North Korean missile facility
-    - 🇮🇱 **Palmachim** – Israeli F-35I operations
-    - 🇦🇪 **Al Dhafra** – US F-35 deployment
+    | Location | Stealth Activity | Max Range |
+    |----------|-----------------|-----------|
+    | 🇺🇸 Nellis AFB | F-35 testing | 300 km |
+    | 🇺🇸 Edwards AFB | B-21 development | 350 km |
+    | 🇺🇸 Area 51 | NGAD testing | 400 km |
+    | 🇬🇧 RAF Lakenheath | US F-35A | 250 km |
+    | 🇷🇺 Akhtubinsk | Su-57 testing | 350 km |
+    | 🇨🇳 Dingxin | J-20 operations | 400 km |
     """)
 
 st.markdown("---")
-st.markdown("🛸 **StealthPDPRadar v4.1** | Real-World Location Presets | Tony Ford Model")
+st.markdown("🛸 **StealthPDPRadar v4.2** | Real-World Location Presets | Tony Ford Model")
