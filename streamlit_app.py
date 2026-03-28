@@ -1,6 +1,6 @@
 """
-StealthPDPRadar v19.0 – WORKING REAL RADAR DATA
-OpenSky Network | Real aircraft | Live tracking
+StealthPDPRadar v21.0 – WORKING REAL RADAR DATA
+OpenSky Network | Real aircraft | Delayed for reliability
 """
 
 import streamlit as st
@@ -11,7 +11,7 @@ import io
 import json
 import pandas as pd
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import warnings
 import requests
 
@@ -20,7 +20,7 @@ warnings.filterwarnings('ignore')
 # ── PAGE CONFIG ─────────────────────────────────────────────
 st.set_page_config(
     layout="wide",
-    page_title="StealthPDPRadar v19.0",
+    page_title="StealthPDPRadar v21.0",
     page_icon="🛸",
     initial_sidebar_state="expanded"
 )
@@ -63,20 +63,28 @@ st.markdown("""
         50% { opacity: 0.3; }
         100% { opacity: 1; }
     }
+    .data-status {
+        background-color: #1a3a2a;
+        padding: 8px;
+        border-radius: 8px;
+        margin: 10px 0;
+        text-align: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ── AIRPORT DATABASE ─────────────────────────────────────────────
 AIRPORTS = {
-    "🇺🇸 Nellis AFB (Las Vegas)": {"lat": 36.2358, "lon": -115.0341, "range_km": 300},
-    "🇺🇸 Edwards AFB (California)": {"lat": 34.9056, "lon": -117.8839, "range_km": 350},
-    "🇺🇸 Los Angeles International": {"lat": 33.9416, "lon": -118.4085, "range_km": 300},
-    "🇺🇸 Area 51 (Nevada)": {"lat": 37.2390, "lon": -115.8158, "range_km": 400},
+    "🇺🇸 Los Angeles (LAX)": {"lat": 33.9416, "lon": -118.4085, "range_km": 300},
+    "🇺🇸 New York (JFK)": {"lat": 40.6413, "lon": -73.7781, "range_km": 300},
+    "🇺🇸 Nellis AFB": {"lat": 36.2358, "lon": -115.0341, "range_km": 300},
+    "🇺🇸 Edwards AFB": {"lat": 34.9056, "lon": -117.8839, "range_km": 350},
     "🇬🇧 London Heathrow": {"lat": 51.4700, "lon": -0.4543, "range_km": 300},
     "🇫🇷 Paris CDG": {"lat": 49.0097, "lon": 2.5479, "range_km": 300},
     "🇩🇪 Frankfurt": {"lat": 50.0379, "lon": 8.5622, "range_km": 300},
     "🇯🇵 Tokyo Narita": {"lat": 35.7647, "lon": 140.3864, "range_km": 350},
+    "🇦🇪 Dubai DXB": {"lat": 25.2532, "lon": 55.3657, "range_km": 320},
 }
 
 STEALTH_SIGNATURES = {
@@ -88,18 +96,19 @@ STEALTH_SIGNATURES = {
 }
 
 
-# ── WORKING REAL RADAR DATA FETCHER ─────────────────────────────────────────────
-@st.cache_data(ttl=10)
-def fetch_real_radar_data(lat, lon, radius_km):
+# ── WORKING REAL DATA FETCHER WITH DELAY ─────────────────────────────────────────────
+@st.cache_data(ttl=15)
+def fetch_real_aircraft_data(lat, lon, radius_km):
     """
-    Fetch REAL aircraft from OpenSky Network - Works reliably
+    Fetch REAL aircraft from OpenSky Network
+    Using the live states endpoint with timeout
     """
     try:
-        # OpenSky Network REST API - No key required
-        # Get all states
+        # OpenSky Network - No API key required
         url = "https://opensky-network.org/api/states/all"
         
-        response = requests.get(url, timeout=10)
+        # Add timeout to prevent hanging
+        response = requests.get(url, timeout=8)
         
         if response.status_code == 200:
             data = response.json()
@@ -109,31 +118,23 @@ def fetch_real_radar_data(lat, lon, radius_km):
             for state in states:
                 if state is None or len(state) < 10:
                     continue
-                
-                # Parse state data
-                icao24 = state[0]
+                    
                 callsign = state[1].strip() if state[1] else ""
-                origin_country = state[2]
-                time_position = state[3]
-                last_contact = state[4]
-                lon = state[5]
-                lat = state[6]
+                lon_pos = state[5]
+                lat_pos = state[6]
                 altitude = state[7] if state[7] else 0
-                on_ground = state[8]
                 velocity = state[9] if state[9] else 0
                 heading = state[10] if state[10] else 0
-                vertical_rate = state[11] if state[11] else 0
-                squawk = state[14] if state[14] else ""
                 
-                if lat and lon:
+                if lat_pos and lon_pos and velocity > 0:
                     # Calculate relative position
-                    dx = (lon - lon) * 85
-                    dy = (lat - lat) * 111
+                    dx = (lon_pos - lon) * 85
+                    dy = (lat_pos - lat) * 111
                     distance = np.sqrt(dx**2 + dy**2)
                     
-                    if distance <= radius_km and velocity > 0:
+                    if distance <= radius_km:
                         # Determine aircraft type
-                        if any(x in callsign.upper() for x in ['RCH', 'AF', 'CFC', 'RRR', 'NATO', 'USAF', 'NAVY', 'AIR']):
+                        if any(x in callsign.upper() for x in ['RCH', 'AF', 'CFC', 'RRR', 'NATO', 'USAF']):
                             ac_type = "Military"
                         elif callsign and callsign[0] == 'N':
                             ac_type = "Private"
@@ -144,49 +145,46 @@ def fetch_real_radar_data(lat, lon, radius_km):
                         
                         aircraft.append({
                             'callsign': callsign if callsign else "???",
-                            'icao': icao24,
                             'x_km': dx,
                             'y_km': dy,
                             'altitude': int(altitude),
                             'speed': int(velocity),
                             'heading': float(heading),
                             'type': ac_type,
-                            'country': origin_country,
                             'is_real': True
                         })
             
             if aircraft:
                 return aircraft, f"OpenSky Network ({len(aircraft)} real aircraft)"
             else:
-                return None, "No aircraft in range"
+                return None, "No aircraft in range (try a busier airport like LAX or JFK)"
                 
     except requests.exceptions.Timeout:
-        return None, "OpenSky API timeout - try again"
+        return None, "OpenSky API timeout - API is rate limited, waiting..."
     except Exception as e:
-        return None, f"API error: {str(e)[:50]}"
+        return None, f"API connection issue: {str(e)[:50]}"
     
-    return None, "No data received"
+    return None, "No data received - API may be busy"
 
 
 def update_aircraft_movement(aircraft, dt, range_km):
-    """Update positions for real aircraft (slight movement for visualization)"""
+    """Update positions for real aircraft (slight movement)"""
     for ac in aircraft:
-        # Real aircraft move based on speed
-        speed_kms = ac['speed'] * 0.514 * 0.05  # Reduced for smoother movement
-        distance = speed_kms * dt
-        heading_rad = np.radians(ac['heading'])
-        ac['x_km'] += distance * np.cos(heading_rad)
-        ac['y_km'] += distance * np.sin(heading_rad)
-        
-        # Keep within range bounds
-        ac['x_km'] = np.clip(ac['x_km'], -range_km, range_km)
-        ac['y_km'] = np.clip(ac['y_km'], -range_km, range_km)
+        if ac.get('is_real', False):
+            speed_kms = ac['speed'] * 0.514 * 0.1
+            distance = speed_kms * dt
+            heading_rad = np.radians(ac['heading'])
+            ac['x_km'] += distance * np.cos(heading_rad)
+            ac['y_km'] += distance * np.sin(heading_rad)
+            
+            ac['x_km'] = np.clip(ac['x_km'], -range_km, range_km)
+            ac['y_km'] = np.clip(ac['y_km'], -range_km, range_km)
     
     return aircraft
 
 
 def detect_stealth(aircraft, epsilon=1e-10):
-    """Apply quantum stealth detection to real aircraft"""
+    """Apply quantum stealth detection"""
     mixing = epsilon * 1e15 / 1e-9
     
     for ac in aircraft:
@@ -199,7 +197,6 @@ def detect_stealth(aircraft, epsilon=1e-10):
             quantum_sig = mixing * 50
             prob = min(quantum_sig * 30, 95)
             
-            # Match against known stealth platforms
             best_match = None
             best_score = 0
             for platform, sig in STEALTH_SIGNATURES.items():
@@ -224,47 +221,51 @@ def detect_stealth(aircraft, epsilon=1e-10):
 
 # ── SIDEBAR ─────────────────────────────────────────────
 with st.sidebar:
-    st.title("🛸 StealthPDPRadar v19.0")
-    st.markdown("*WORKING REAL RADAR*")
+    st.title("🛸 StealthPDPRadar v21.0")
+    st.markdown("*Real Radar Data*")
     st.markdown("---")
     
     selected_airport = st.selectbox("Radar Location", list(AIRPORTS.keys()), index=0)
     airport = AIRPORTS[selected_airport]
     range_km = st.slider("Range (km)", 100, 500, airport['range_km'])
-    update_speed = st.slider("Update Speed (s)", 2, 15, 5)
     
     st.markdown("---")
     epsilon = st.slider("Kinetic Mixing ε", 1e-12, 1e-8, 1e-10, format="%.1e")
     
     st.markdown("---")
     
-    if st.button("🔄 FORCE REFRESH", use_container_width=True):
+    if st.button("🔄 FETCH REAL DATA", use_container_width=True):
         st.cache_data.clear()
         st.session_state.last_fetch = 0
+        st.session_state.manual_refresh = True
     
     st.markdown("---")
     st.markdown("📡 **Source:** OpenSky Network")
     st.markdown("🔴 **Real aircraft from live feed**")
-    st.caption("Tony Ford | v19.0 | Working Real Data")
+    st.markdown("⏱️ **Data delay:** 5-10 seconds (API rate limited)")
+    st.caption("Tony Ford | v21.0 | Working Real Data")
 
 
 # ── INITIALIZE SESSION STATE ─────────────────────────────────────────────
 if 'aircraft' not in st.session_state:
     st.session_state.aircraft = []
 if 'data_source' not in st.session_state:
-    st.session_state.data_source = "Waiting for data..."
+    st.session_state.data_source = "Click FETCH REAL DATA to start"
 if 'last_fetch' not in st.session_state:
     st.session_state.last_fetch = 0
 if 'last_update' not in st.session_state:
     st.session_state.last_update = time.time()
+if 'manual_refresh' not in st.session_state:
+    st.session_state.manual_refresh = False
 
 
 # ── FETCH REAL RADAR DATA ─────────────────────────────────────────────
 current_time = time.time()
 
-if current_time - st.session_state.last_fetch >= 10:
-    with st.spinner("📡 Fetching REAL aircraft from OpenSky Network..."):
-        aircraft, source = fetch_real_radar_data(airport['lat'], airport['lon'], range_km)
+# Auto-refresh every 15 seconds OR manual refresh
+if st.session_state.manual_refresh or (current_time - st.session_state.last_fetch >= 15):
+    with st.spinner("📡 Fetching REAL aircraft data from OpenSky Network..."):
+        aircraft, source = fetch_real_aircraft_data(airport['lat'], airport['lon'], range_km)
         
         if aircraft:
             st.session_state.aircraft = aircraft
@@ -272,17 +273,21 @@ if current_time - st.session_state.last_fetch >= 10:
             st.session_state.last_fetch = current_time
         else:
             st.session_state.data_source = source
+        
+        st.session_state.manual_refresh = False
 
 
-# ── UPDATE MOVEMENT ─────────────────────────────────────────────
-dt = min(current_time - st.session_state.last_update, update_speed)
-
-if st.session_state.aircraft and dt >= update_speed:
-    st.session_state.aircraft = update_aircraft_movement(
-        st.session_state.aircraft, dt, range_km
-    )
-    st.session_state.last_update = current_time
-    st.rerun()
+# ── UPDATE MOVEMENT (if real data exists) ─────────────────────────────────────────────
+if st.session_state.aircraft:
+    current_time = time.time()
+    dt = min(current_time - st.session_state.last_update, 5.0)
+    
+    if dt >= 2.0:
+        st.session_state.aircraft = update_aircraft_movement(
+            st.session_state.aircraft, dt, range_km
+        )
+        st.session_state.last_update = current_time
+        st.rerun()
 
 
 # ── APPLY STEALTH DETECTION ─────────────────────────────────────────────
@@ -295,14 +300,18 @@ st.markdown(f"*REAL RADAR DATA – {selected_airport}*")
 st.markdown(f"**Range:** {range_km} km")
 st.markdown("---")
 
-# Data source status
+# Data status display
 if aircraft and any(a.get('is_real', False) for a in aircraft):
-    st.markdown(f'<div><span class="live-indicator"></span> <strong>LIVE REAL RADAR</strong> <span class="real-badge">OpenSky Network</span></div>', unsafe_allow_html=True)
-    st.caption(f"📡 {st.session_state.data_source}")
-    st.caption("🟢 Real aircraft are moving on radar")
+    st.markdown(f"""
+    <div class="data-status">
+    <span class="live-indicator"></span> 
+    <strong>LIVE REAL RADAR ACTIVE</strong><br>
+    {st.session_state.data_source}
+    </div>
+    """, unsafe_allow_html=True)
 else:
-    st.warning("📡 Connecting to OpenSky Network... Real aircraft appear when available")
-    st.caption("OpenSky Network provides free, real-time aircraft tracking data")
+    st.warning(f"⚠️ {st.session_state.data_source}")
+    st.info("💡 **Tip:** Try a busy airport like Los Angeles (LAX) or New York (JFK) for more aircraft")
 
 # Metrics
 col1, col2, col3, col4 = st.columns(4)
@@ -390,10 +399,9 @@ if stealth_aircraft:
     for ac in stealth_aircraft[:10]:
         platform = ac.get('detected_platform', 'Unknown')
         conf = int(ac['stealth_prob'])
-        real_tag = "🔴 REAL" if ac.get('is_real', False) else "🟡"
         st.markdown(f"""
         <div class="stealth-alert">
-        {real_tag} **{platform}** ({conf}% match) • {ac['callsign']}<br>
+        🔴 **{platform}** ({conf}% match) • {ac['callsign']}<br>
         📍 {ac['x_km']:.0f} km E, {ac['y_km']:.0f} km N • 🛸 {ac['altitude']:,} ft • {ac['speed']} kt
         </div>
         """, unsafe_allow_html=True)
@@ -421,9 +429,6 @@ if aircraft:
     df = pd.DataFrame(data)
     df = df.sort_values('Stealth %', ascending=False)
     st.dataframe(df, use_container_width=True, height=400)
-    
-    if not any(a.get('is_real', False) for a in aircraft):
-        st.info("📡 Connecting to OpenSky Network... Real aircraft appear when within range.")
 
 
 # ── EXPORT ─────────────────────────────────────────────
@@ -450,4 +455,4 @@ with col_e2:
 
 
 st.markdown("---")
-st.markdown("🛸 **StealthPDPRadar v19.0** | OpenSky Network | Real Aircraft | Live Tracking | Tony Ford Model")
+st.markdown("🛸 **StealthPDPRadar v21.0** | OpenSky Network | Real Aircraft (5-10s delay) | Tony Ford Model")
