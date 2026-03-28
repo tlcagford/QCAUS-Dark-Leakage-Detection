@@ -1,6 +1,6 @@
 """
-StealthPDPRadar v14.0 – Working Real Data
-Multiple data sources | Auto-failover | Live aircraft tracking
+StealthPDPRadar v14.1 – Fixed KeyError
+Working real data | Auto-failover | Stealth detection
 """
 
 import streamlit as st
@@ -14,15 +14,13 @@ import time
 from datetime import datetime
 import warnings
 import requests
-import urllib3
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings('ignore')
 
 # ── PAGE CONFIG ─────────────────────────────────────────────
 st.set_page_config(
     layout="wide",
-    page_title="StealthPDPRadar v14.0",
+    page_title="StealthPDPRadar v14.1",
     page_icon="🛸",
     initial_sidebar_state="expanded"
 )
@@ -88,10 +86,10 @@ STEALTH_SIGNATURES = {
 }
 
 
-# ── MULTIPLE DATA SOURCES ─────────────────────────────────────────────
+# ── DATA FETCHERS ─────────────────────────────────────────────
 
 def fetch_opensky(lat, lon, radius_km):
-    """Fetch from OpenSky Network (free, no key)"""
+    """Fetch from OpenSky Network"""
     try:
         url = "https://opensky-network.org/api/states/all"
         response = requests.get(url, timeout=5)
@@ -118,7 +116,7 @@ def fetch_opensky(lat, lon, radius_km):
                     distance = np.sqrt(dx**2 + dy**2)
                     
                     if distance <= radius_km:
-                        if any(x in callsign.upper() for x in ['RCH', 'AF', 'CFC', 'RRR', 'NATO', 'USAF']):
+                        if any(x in callsign.upper() for x in ['RCH', 'AF', 'CFC', 'RRR', 'NATO']):
                             ac_type = "Military"
                         elif callsign and callsign[0] == 'N':
                             ac_type = "Private"
@@ -138,87 +136,15 @@ def fetch_opensky(lat, lon, radius_km):
                             'source': 'OpenSky'
                         })
             return aircraft
-    except Exception as e:
+    except:
         pass
     return None
-
-
-def fetch_adsb_exchange(lat, lon, radius_km):
-    """Fetch from ADSB Exchange (alternative)"""
-    try:
-        url = f"https://api.adsbexchange.com/API/v1/lat/{lat}/lon/{lon}/dist/{radius_km}/"
-        response = requests.get(url, timeout=5)
-        
-        if response.status_code == 200:
-            data = response.json()
-            ac_list = data.get('ac', [])
-            
-            aircraft = []
-            for ac in ac_list[:80]:
-                if 'lat' not in ac or 'lon' not in ac:
-                    continue
-                    
-                callsign = ac.get('flight', '').strip()
-                lat_pos = ac['lat']
-                lon_pos = ac['lon']
-                altitude = ac.get('alt_baro', 0)
-                velocity = ac.get('speed', 0)
-                heading = ac.get('track', 0)
-                
-                dx = (lon_pos - lon) * 85
-                dy = (lat_pos - lat) * 111
-                distance = np.sqrt(dx**2 + dy**2)
-                
-                if distance <= radius_km:
-                    if any(x in callsign.upper() for x in ['RCH', 'AF', 'CFC', 'RRR']):
-                        ac_type = "Military"
-                    elif callsign and callsign[0] == 'N':
-                        ac_type = "Private"
-                    elif callsign:
-                        ac_type = "Commercial"
-                    else:
-                        ac_type = "Unknown"
-                    
-                    aircraft.append({
-                        'callsign': callsign if callsign else "???",
-                        'x_km': dx,
-                        'y_km': dy,
-                        'altitude': int(altitude),
-                        'speed': int(velocity),
-                        'heading': float(heading),
-                        'type': ac_type,
-                        'source': 'ADSBx'
-                    })
-            return aircraft
-    except Exception as e:
-        pass
-    return None
-
-
-def fetch_real_aircraft(lat, lon, radius_km):
-    """Try multiple sources to get real data"""
-    
-    # Try OpenSky first
-    aircraft = fetch_opensky(lat, lon, radius_km)
-    if aircraft:
-        return aircraft, "OpenSky Network"
-    
-    # Try ADSB Exchange
-    aircraft = fetch_adsb_exchange(lat, lon, radius_km)
-    if aircraft:
-        return aircraft, "ADSB Exchange"
-    
-    # Fallback to simulated
-    return generate_simulated_aircraft(lat, lon, radius_km), "Simulated (Real data unavailable)"
 
 
 def generate_simulated_aircraft(lat, lon, radius_km):
-    """Generate realistic simulated aircraft with stealth signatures"""
+    """Generate realistic simulated aircraft"""
     aircraft = []
     num = np.random.randint(18, 32)
-    
-    # Ensure we include some stealth targets
-    include_stealth = True
     
     for i in range(num):
         angle = np.random.uniform(0, 2*np.pi)
@@ -226,34 +152,31 @@ def generate_simulated_aircraft(lat, lon, radius_km):
         x = dist * np.cos(angle)
         y = dist * np.sin(angle)
         
-        # 30% chance of being military (stealth candidate)
-        if include_stealth and np.random.random() < 0.3:
+        # 25% chance of being military (stealth candidate)
+        is_military = np.random.random() < 0.25
+        
+        if is_military:
+            # Military aircraft - could be stealth
             platform = np.random.choice(list(STEALTH_SIGNATURES.keys()))
             sig = STEALTH_SIGNATURES[platform]
             ac_type = "Military"
             callsign = f"RCH{np.random.randint(100, 999)}"
-            alt = sig['typical_altitude'] + np.random.randint(-5000, 5000)
-            spd = sig['typical_speed'] + np.random.randint(-50, 50)
+            alt = sig['altitude'] + np.random.randint(-5000, 5000)
+            spd = sig['speed'] + np.random.randint(-50, 50)
             heading = np.random.uniform(0, 360)
-            is_stealth_candidate = True
         else:
-            type_choice = np.random.choice(["Commercial", "Military", "Private"], p=[0.5, 0.25, 0.25])
+            type_choice = np.random.choice(["Commercial", "Private"], p=[0.7, 0.3])
             ac_type = type_choice
             
             if type_choice == "Commercial":
-                callsign = f"{np.random.choice(['UAL', 'DAL', 'AAL', 'SWA', 'JBU'])}{np.random.randint(100, 999)}"
+                callsign = f"{np.random.choice(['UAL', 'DAL', 'AAL', 'SWA'])}{np.random.randint(100, 999)}"
                 alt = np.random.randint(28000, 41000)
                 spd = np.random.randint(400, 550)
-            elif type_choice == "Military":
-                callsign = f"RCH{np.random.randint(100, 999)}"
-                alt = np.random.randint(20000, 35000)
-                spd = np.random.randint(350, 500)
             else:
                 callsign = f"N{np.random.randint(1000, 9999)}"
                 alt = np.random.randint(5000, 25000)
                 spd = np.random.randint(180, 350)
             heading = np.random.uniform(0, 360)
-            is_stealth_candidate = False
         
         aircraft.append({
             'callsign': callsign,
@@ -263,11 +186,19 @@ def generate_simulated_aircraft(lat, lon, radius_km):
             'speed': spd,
             'heading': heading,
             'type': ac_type,
-            'source': 'Simulated',
-            'stealth_candidate': is_stealth_candidate
+            'source': 'Simulated'
         })
     
     return aircraft
+
+
+def fetch_real_aircraft(lat, lon, radius_km):
+    """Try to fetch real aircraft, fallback to simulated"""
+    aircraft = fetch_opensky(lat, lon, radius_km)
+    if aircraft:
+        return aircraft, "OpenSky Network (Real)"
+    
+    return generate_simulated_aircraft(lat, lon, radius_km), "Simulated (Real data unavailable)"
 
 
 # ── STEALTH DETECTION ─────────────────────────────────────────────
@@ -281,7 +212,7 @@ def detect_stealth(aircraft, epsilon=1e-10):
             ac['is_stealth'] = False
             ac['detected_platform'] = None
             
-        elif ac['type'] == "Military" or ac.get('stealth_candidate', False):
+        elif ac['type'] == "Military":
             quantum_sig = mixing * 50
             prob = min(quantum_sig * 30, 95)
             
@@ -311,7 +242,7 @@ def detect_stealth(aircraft, epsilon=1e-10):
 def update_aircraft_movement(aircraft, dt, range_km):
     """Update aircraft positions"""
     for ac in aircraft:
-        speed_kms = ac['speed'] * 0.514 * 0.5  # 0.5 factor for smoother movement
+        speed_kms = ac['speed'] * 0.514 * 0.5
         distance = speed_kms * dt
         heading_rad = np.radians(ac['heading'])
         ac['x_km'] += distance * np.cos(heading_rad)
@@ -330,8 +261,8 @@ def update_aircraft_movement(aircraft, dt, range_km):
 
 # ── SIDEBAR ─────────────────────────────────────────────
 with st.sidebar:
-    st.title("🛸 StealthPDPRadar v14.0")
-    st.markdown("*Working Real Data*")
+    st.title("🛸 StealthPDPRadar v14.1")
+    st.markdown("*Fixed KeyError*")
     st.markdown("---")
     
     selected_airport = st.selectbox("Radar Location", list(AIRPORTS.keys()), index=0)
@@ -351,8 +282,8 @@ with st.sidebar:
         st.session_state.last_fetch = 0
     
     st.markdown("---")
-    st.markdown('<span class="data-source">📡 Sources: OpenSky + ADSB Exchange</span>', unsafe_allow_html=True)
-    st.caption("Tony Ford | v14.0 | Auto-failover")
+    st.markdown('<span class="data-source">📡 Source: OpenSky Network</span>', unsafe_allow_html=True)
+    st.caption("Tony Ford | v14.1 | Fixed KeyError")
 
 
 # ── INITIALIZE SESSION STATE ─────────────────────────────────────────────
@@ -370,7 +301,7 @@ if 'last_update' not in st.session_state:
 current_time = time.time()
 
 if current_time - st.session_state.last_fetch >= 15:
-    with st.spinner("📡 Fetching real aircraft data..."):
+    with st.spinner("📡 Fetching aircraft data..."):
         aircraft, source = fetch_real_aircraft(airport['lat'], airport['lon'], range_km)
         st.session_state.aircraft = aircraft
         st.session_state.data_source = source
@@ -403,7 +334,7 @@ col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric("✈️ Total", len(aircraft))
 with col2:
-    real_count = len([a for a in aircraft if a.get('source') != 'Simulated'])
+    real_count = len([a for a in aircraft if a.get('source') == 'OpenSky'])
     st.metric("📡 Real", real_count)
 with col3:
     military = len([a for a in aircraft if a['type'] == "Military"])
@@ -480,7 +411,7 @@ if stealth_aircraft:
     for ac in stealth_aircraft[:10]:
         platform = ac.get('detected_platform', 'Unknown')
         conf = int(ac['stealth_prob'])
-        source_icon = "🔴" if ac.get('source') != 'Simulated' else "🟡"
+        source_icon = "🔴" if ac.get('source') == 'OpenSky' else "🟡"
         st.markdown(f"""
         <div class="stealth-alert">
         {source_icon} ⚠️ **{platform}** ({conf}%) • {ac['callsign']}<br>
@@ -542,4 +473,4 @@ with col_e2:
 
 
 st.markdown("---")
-st.markdown("🛸 **StealthPDPRadar v14.0** | Multiple Data Sources | Auto-Failover | Tony Ford Model")
+st.markdown("🛸 **StealthPDPRadar v14.1** | Fixed KeyError | Real Data | Tony Ford Model")
