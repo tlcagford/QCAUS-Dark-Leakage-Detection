@@ -1,25 +1,26 @@
 """
-StealthPDPRadar v7.0 – Complete Working Version
-Live moving radar | Start/Stop controls | Real-time coordinates
+StealthPDPRadar v8.0 – Professional Live Radar
+Real ADSB aircraft | Live identification | PDP stealth overlay | Airport traffic
 """
 
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, Rectangle
 import io
 import json
 import pandas as pd
 import time
 from datetime import datetime
 import warnings
+import requests
 
 warnings.filterwarnings('ignore')
 
 # ── PAGE CONFIG ─────────────────────────────────────────────
 st.set_page_config(
     layout="wide",
-    page_title="StealthPDPRadar v7.0",
+    page_title="StealthPDPRadar v8.0",
     page_icon="🛸",
     initial_sidebar_state="expanded"
 )
@@ -46,7 +47,24 @@ st.markdown("""
         50% { opacity: 0.5; transform: scale(1.2); }
         100% { opacity: 1; transform: scale(1); }
     }
-    .coord-input {
+    .aircraft-card {
+        background-color: #1a1a3a;
+        padding: 8px;
+        border-radius: 6px;
+        margin: 5px 0;
+        border-left: 3px solid #00aaff;
+        font-size: 12px;
+    }
+    .stealth-alert {
+        background-color: #ff4444;
+        color: white;
+        padding: 10px;
+        border-radius: 8px;
+        text-align: center;
+        font-weight: bold;
+        margin: 10px 0;
+    }
+    .coord-panel {
         background-color: #1a1a3a;
         padding: 10px;
         border-radius: 8px;
@@ -57,157 +75,177 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ── LOCATIONS ─────────────────────────────────────────────
-LOCATION_NAMES = [
-    "🇺🇸 Nellis AFB (NV, USA)",
-    "🇺🇸 Edwards AFB (CA, USA)",
-    "🇺🇸 Area 51 (Groom Lake, NV)",
-    "🇬🇧 RAF Lakenheath (UK)",
-    "🇷🇺 Akhtubinsk (Russia)",
-    "🇨🇳 Dingxin Air Base (China)",
-    "🇮🇷 Shahid Satari (Iran)",
-    "🇰🇵 Sohae Satellite Station (North Korea)",
-    "🇮🇱 Palmachim Airbase (Israel)",
-    "🇦🇪 Al Dhafra AB (UAE)"
-]
-
-LOCATIONS = {
-    "🇺🇸 Nellis AFB (NV, USA)": {"lat": 36.2358, "lon": -115.0341, "range_km": 300},
-    "🇺🇸 Edwards AFB (CA, USA)": {"lat": 34.9056, "lon": -117.8839, "range_km": 350},
-    "🇺🇸 Area 51 (Groom Lake, NV)": {"lat": 37.2390, "lon": -115.8158, "range_km": 400},
-    "🇬🇧 RAF Lakenheath (UK)": {"lat": 52.4092, "lon": 0.5565, "range_km": 250},
-    "🇷🇺 Akhtubinsk (Russia)": {"lat": 48.3000, "lon": 46.1667, "range_km": 350},
-    "🇨🇳 Dingxin Air Base (China)": {"lat": 40.7833, "lon": 99.5333, "range_km": 400},
-    "🇮🇷 Shahid Satari (Iran)": {"lat": 35.2469, "lon": 52.0222, "range_km": 250},
-    "🇰🇵 Sohae Satellite Station (North Korea)": {"lat": 39.2966, "lon": 124.7231, "range_km": 300},
-    "🇮🇱 Palmachim Airbase (Israel)": {"lat": 31.9025, "lon": 34.6903, "range_km": 280},
-    "🇦🇪 Al Dhafra AB (UAE)": {"lat": 24.2481, "lon": 54.5475, "range_km": 320}
+# ── AIRPORT DATABASE ─────────────────────────────────────────────
+AIRPORTS = {
+    "🇺🇸 Nellis AFB (Las Vegas)": {"lat": 36.2358, "lon": -115.0341, "range_km": 300, "code": "LSV"},
+    "🇺🇸 Edwards AFB": {"lat": 34.9056, "lon": -117.8839, "range_km": 350, "code": "EDW"},
+    "🇺🇸 Area 51": {"lat": 37.2390, "lon": -115.8158, "range_km": 400, "code": "XTA"},
+    "🇬🇧 RAF Lakenheath": {"lat": 52.4092, "lon": 0.5565, "range_km": 250, "code": "LKZ"},
+    "🇷🇺 Moscow Domodedovo": {"lat": 55.4086, "lon": 37.9063, "range_km": 350, "code": "DME"},
+    "🇨🇳 Beijing Capital": {"lat": 40.0801, "lon": 116.5846, "range_km": 400, "code": "PEK"},
+    "🇮🇷 Tehran Mehrabad": {"lat": 35.6892, "lon": 51.3134, "range_km": 250, "code": "THR"},
+    "🇮🇱 Ben Gurion": {"lat": 32.0114, "lon": 34.8867, "range_km": 280, "code": "TLV"},
+    "🇦🇪 Dubai International": {"lat": 25.2532, "lon": 55.3657, "range_km": 320, "code": "DXB"},
+    "🇫🇷 Paris CDG": {"lat": 49.0097, "lon": 2.5479, "range_km": 300, "code": "CDG"},
+    "🇩🇪 Frankfurt": {"lat": 50.0379, "lon": 8.5622, "range_km": 300, "code": "FRA"},
+    "🇯🇵 Tokyo Narita": {"lat": 35.7647, "lon": 140.3864, "range_km": 350, "code": "NRT"},
 }
 
 RCS_FACTORS = {
     "F-35 Lightning II": 0.001,
     "B-21 Raider": 0.0005,
     "NGAD": 0.0003,
-    "HQ-19": 0.005,
-    "Kinzhal": 0.01,
     "Su-57": 0.01,
     "J-20": 0.008,
+    "Commercial Airliner": 50.0,
+    "Private Jet": 10.0,
+    "Military Transport": 30.0,
     "Drone": 0.02
 }
 
 
+# ── ADSB AIRCRAFT FETCHER ─────────────────────────────────────────────
+
+def fetch_adsb_aircraft(lat, lon, radius_km=300):
+    """Fetch real aircraft from ADSB‑Exchange public API"""
+    try:
+        # ADSB‑Exchange public API (no key required)
+        url = f"https://api.adsbexchange.com/API/v1/lat/{lat}/lon/{lon}/dist/{radius_km}/"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            aircraft = []
+            for ac in data.get('ac', []):
+                if 'lat' in ac and 'lon' in ac and ac['lat'] != 0 and ac['lon'] != 0:
+                    # Convert to relative coordinates
+                    dx = (ac['lon'] - lon) * 111  # degrees to km (approx)
+                    dy = (ac['lat'] - lat) * 111
+                    
+                    # Only include if within range
+                    if np.sqrt(dx**2 + dy**2) <= radius_km:
+                        aircraft.append({
+                            'callsign': ac.get('flight', 'Unknown').strip(),
+                            'lat': ac['lat'],
+                            'lon': ac['lon'],
+                            'x_km': dx,
+                            'y_km': dy,
+                            'altitude': ac.get('alt_baro', 0),
+                            'speed': ac.get('speed', 0),
+                            'track': ac.get('track', 0),
+                            'type': ac.get('type', 'Unknown'),
+                            'squawk': ac.get('squawk', '0000')
+                        })
+            return aircraft
+    except Exception as e:
+        st.warning(f"ADSB data fetch: {e}")
+    
+    return []
+
+
+def generate_simulated_aircraft(lat, lon, radius_km):
+    """Generate realistic simulated aircraft for demo"""
+    aircraft = []
+    types = ["Commercial Airliner", "Private Jet", "Military Transport", "Drone"]
+    callsigns = ["UAL123", "DAL456", "SWA789", "N12345", "AFR001", "BAW202", "LUFTHANSA"]
+    
+    for i in range(np.random.randint(5, 15)):
+        angle = np.random.uniform(0, 2*np.pi)
+        dist = np.random.uniform(20, radius_km - 20)
+        x_km = dist * np.cos(angle)
+        y_km = dist * np.sin(angle)
+        
+        aircraft.append({
+            'callsign': np.random.choice(callsigns) + str(np.random.randint(100, 999)),
+            'lat': lat + (y_km / 111),
+            'lon': lon + (x_km / 111),
+            'x_km': x_km,
+            'y_km': y_km,
+            'altitude': np.random.randint(5000, 40000),
+            'speed': np.random.randint(200, 600),
+            'track': np.random.randint(0, 360),
+            'type': np.random.choice(types),
+            'squawk': f"{np.random.randint(0, 7)}{np.random.randint(0, 7)}{np.random.randint(0, 7)}{np.random.randint(0, 7)}"
+        })
+    
+    return aircraft
+
+
 # ── PDP QUANTUM RADAR CORE ─────────────────────────────────────────────
 
-def generate_radar_frame(range_km, target_x, target_y, target_type="F-35", noise_level=0.03):
-    """Generate a single radar frame"""
-    size = 200
-    x = np.linspace(-range_km, range_km, size)
-    y = np.linspace(-range_km, range_km, size)
-    X, Y = np.meshgrid(x, y)
-    
+def apply_pdp_stealth_detection(aircraft_list, target_type, epsilon=1e-10, B_field=1e15, m_dark=1e-9):
+    """Apply PDP quantum filter to detect stealth aircraft among regular traffic"""
     rcs = RCS_FACTORS.get(target_type, 0.001)
     
-    # Distance from radar (center) to target
-    distance = np.sqrt((X - target_x)**2 + (Y - target_y)**2)
-    
-    # Conventional radar return (stealth target is almost invisible)
-    conventional = rcs * np.exp(-distance**2 / (2 * (range_km/8)**2))
-    
-    # PDP Quantum signature (stealth targets actually have STRONGER quantum signature)
-    # This is the key physics: stealth coatings work on photons, not dark photons
-    quantum_strength = 0.25 * (1 / (rcs + 1e-12)) ** 0.3
-    quantum = quantum_strength * np.exp(-distance**2 / (2 * (range_km/5)**2))
-    
-    # Add noise
-    noise = np.random.randn(size, size) * noise_level
-    radar_data = conventional + quantum + noise
-    radar_data = np.clip(radar_data, 0, 1)
-    
-    return radar_data, conventional, quantum
-
-
-def pdp_enhance(radar_data, conventional, quantum, epsilon=1e-10, B_field=1e15, m_dark=1e-9):
-    """Apply PDP quantum filter to extract stealth signature"""
     # PDP mixing strength
     mixing = epsilon * B_field / (m_dark + 1e-12)
     
-    # Dark-mode leakage - this reveals stealth targets
-    dark_mode_leakage = quantum * mixing * 5.0  # Enhanced for visibility
-    dark_mode_leakage = np.clip(dark_mode_leakage, 0, 1)
+    for ac in aircraft_list:
+        # Regular aircraft have large RCS, small quantum signature
+        if ac['type'] in ["Commercial Airliner", "Private Jet", "Military Transport"]:
+            ac['quantum_signature'] = 0.01 * mixing
+            ac['stealth_probability'] = 0
+            ac['detected'] = False
+        else:
+            # Stealth aircraft have small RCS, LARGE quantum signature
+            ac['quantum_signature'] = (1 / (rcs + 1e-12)) ** 0.25 * mixing * 5
+            ac['stealth_probability'] = min(ac['quantum_signature'] * 100, 99)
+            ac['detected'] = ac['stealth_probability'] > 20
     
-    # Enhanced radar (combine conventional + quantum signature)
-    enhanced = radar_data + dark_mode_leakage * 0.8
-    enhanced = np.clip(enhanced, 0, 1)
-    
-    return enhanced, dark_mode_leakage
-
-
-def detect_target(dark_mode_leakage, threshold=0.1):
-    """Detect target from dark-mode leakage"""
-    from scipy.ndimage import label
-    
-    mask = dark_mode_leakage > threshold
-    labeled, num_features = label(mask)
-    
-    if num_features > 0:
-        y_idx, x_idx = np.where(labeled == 1)
-        if len(y_idx) > 0:
-            return {
-                'detected': True,
-                'x': np.mean(x_idx),
-                'y': np.mean(y_idx),
-                'strength': np.mean(dark_mode_leakage[y_idx, x_idx]),
-                'confidence': np.mean(dark_mode_leakage[y_idx, x_idx]) * 100
-            }
-    
-    return {'detected': False, 'confidence': 0}
+    return aircraft_list
 
 
 # ── SIDEBAR ─────────────────────────────────────────────
 with st.sidebar:
-    st.title("🛸 StealthPDPRadar v7.0")
-    st.markdown("*Live Moving Radar*")
+    st.title("🛸 StealthPDPRadar v8.0")
+    st.markdown("*Live ADSB Radar | Stealth Detection*")
     st.markdown("---")
     
-    # Location selection
+    # Location/Airport selection
     st.markdown("### 📡 Radar Location")
-    location_preset = st.selectbox("Select Base", LOCATION_NAMES, index=0)
-    location = LOCATIONS[location_preset]
+    airport_names = list(AIRPORTS.keys())
+    selected_airport = st.selectbox("Select Airport/Base", airport_names, index=0)
+    airport = AIRPORTS[selected_airport]
     
-    st.markdown(f"📍 **{location_preset}**")
-    st.markdown(f"📡 Range: {location['range_km']} km")
+    st.markdown(f"""
+    <div class="coord-panel">
+    📍 **{selected_airport}**<br>
+    📡 Range: {airport['range_km']} km<br>
+    🎯 Coordinates: {airport['lat']:.2f}°, {airport['lon']:.2f}°
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Manual coordinate override
+    st.markdown("### 🎯 Custom Coordinates")
+    use_custom = st.checkbox("Use custom coordinates", value=False)
+    
+    if use_custom:
+        col_lat, col_lon = st.columns(2)
+        with col_lat:
+            custom_lat = st.number_input("Latitude", value=airport['lat'], format="%.4f")
+        with col_lon:
+            custom_lon = st.number_input("Longitude", value=airport['lon'], format="%.4f")
+        radar_lat, radar_lon = custom_lat, custom_lon
+    else:
+        radar_lat, radar_lon = airport['lat'], airport['lon']
     
     st.markdown("---")
     
-    # Target selection
-    st.markdown("### 🎯 Stealth Target")
-    target = st.selectbox("Platform", list(RCS_FACTORS.keys()), index=0)
+    # Radar range
+    range_km = st.slider("Radar Range (km)", 50, 500, airport['range_km'])
     
     st.markdown("---")
     
-    # Live Radar Controls
-    st.markdown("### 🎮 Radar Controls")
-    
-    col_btn1, col_btn2 = st.columns(2)
-    with col_btn1:
-        if st.button("▶️ START RADAR", use_container_width=True):
-            st.session_state.radar_active = True
-    with col_btn2:
-        if st.button("⏹️ STOP RADAR", use_container_width=True):
-            st.session_state.radar_active = False
-    
-    update_interval = st.slider("Update Speed (s)", 0.2, 2.0, 0.5)
+    # Stealth target to detect
+    st.markdown("### 🎯 Search For")
+    stealth_targets = ["F-35 Lightning II", "B-21 Raider", "NGAD", "Su-57", "J-20", "Drone"]
+    target = st.selectbox("Stealth Platform", stealth_targets, index=0)
     
     st.markdown("---")
     
-    # Manual Target Position (when stopped)
-    if 'radar_active' in st.session_state and not st.session_state.radar_active:
-        st.markdown("### 🎯 Manual Target Position")
-        st.markdown('<div class="coord-input">', unsafe_allow_html=True)
-        manual_x = st.slider("X Coordinate (km)", -location['range_km'], location['range_km'], int(location['range_km'] * 0.3))
-        manual_y = st.slider("Y Coordinate (km)", -location['range_km'], location['range_km'], int(location['range_km'] * 0.2))
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.session_state.manual_target = (manual_x, manual_y)
+    # Data source
+    st.markdown("### 📡 Data Source")
+    data_source = st.radio("Source", ["🌍 Live ADSB Feed", "🧪 Simulated Aircraft"], index=0)
     
     st.markdown("---")
     
@@ -216,264 +254,235 @@ with st.sidebar:
     epsilon = st.slider("Kinetic Mixing ε", 1e-12, 1e-8, 1e-10, format="%.1e")
     B_field = st.slider("B Field (G)", 1e13, 1e16, 1e15, format="%.1e")
     m_dark = st.slider("Dark Photon Mass (eV)", 1e-12, 1e-6, 1e-9, format="%.1e")
-    threshold = st.slider("Detection Threshold", 0.01, 0.5, 0.1)
+    threshold = st.slider("Detection Threshold", 0, 100, 20)
     
     st.markdown("---")
-    st.caption("Tony Ford | StealthPDPRadar v7.0")
-    st.caption("Live moving radar | Start/Stop | Real coordinates")
+    
+    # Controls
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("🔄 SCAN NOW", use_container_width=True):
+            st.session_state.scan_requested = True
+    with col_btn2:
+        if st.button("📡 LIVE MODE", use_container_width=True):
+            st.session_state.live_mode = not st.session_state.get('live_mode', False)
+    
+    st.markdown("---")
+    st.caption("Tony Ford | StealthPDPRadar v8.0")
+    st.caption("Real ADSB aircraft | Live identification | PDP stealth overlay")
 
 
 # ── INITIALIZE SESSION STATE ─────────────────────────────────────────────
-if 'radar_active' not in st.session_state:
-    st.session_state.radar_active = False
-if 'frame_count' not in st.session_state:
-    st.session_state.frame_count = 0
-if 'target_x' not in st.session_state:
-    st.session_state.target_x = location['range_km'] * 0.3
-if 'target_y' not in st.session_state:
-    st.session_state.target_y = location['range_km'] * 0.2
-if 'target_direction_x' not in st.session_state:
-    st.session_state.target_direction_x = 1
-if 'target_direction_y' not in st.session_state:
-    st.session_state.target_direction_y = 1
-if 'manual_target' not in st.session_state:
-    st.session_state.manual_target = (location['range_km'] * 0.3, location['range_km'] * 0.2)
-if 'detection_history' not in st.session_state:
-    st.session_state.detection_history = []
-if 'last_update' not in st.session_state:
-    st.session_state.last_update = 0
+if 'aircraft_data' not in st.session_state:
+    st.session_state.aircraft_data = []
+if 'scan_requested' not in st.session_state:
+    st.session_state.scan_requested = True
+if 'live_mode' not in st.session_state:
+    st.session_state.live_mode = False
+if 'last_scan' not in st.session_state:
+    st.session_state.last_scan = 0
 
 
-# ── UPDATE TARGET POSITION ─────────────────────────────────────────────
+# ── FETCH AIRCRAFT DATA ─────────────────────────────────────────────
 current_time = time.time()
-range_km = location['range_km']
 
-if st.session_state.radar_active:
-    # Moving target (bounces off edges)
-    speed = 15  # km per second
-    dt = update_interval
-    
-    # Update position
-    st.session_state.target_x += st.session_state.target_direction_x * speed * dt
-    st.session_state.target_y += st.session_state.target_direction_y * speed * dt
-    
-    # Bounce off edges
-    if st.session_state.target_x > range_km:
-        st.session_state.target_x = range_km - (st.session_state.target_x - range_km)
-        st.session_state.target_direction_x *= -1
-    if st.session_state.target_x < -range_km:
-        st.session_state.target_x = -range_km + (-range_km - st.session_state.target_x)
-        st.session_state.target_direction_x *= -1
-    if st.session_state.target_y > range_km:
-        st.session_state.target_y = range_km - (st.session_state.target_y - range_km)
-        st.session_state.target_direction_y *= -1
-    if st.session_state.target_y < -range_km:
-        st.session_state.target_y = -range_km + (-range_km - st.session_state.target_y)
-        st.session_state.target_direction_y *= -1
-    
-    target_x = st.session_state.target_x
-    target_y = st.session_state.target_y
-else:
-    # Use manual position when stopped
-    target_x, target_y = st.session_state.manual_target
-    st.session_state.target_x = target_x
-    st.session_state.target_y = target_y
-
-
-# ── GENERATE RADAR FRAME ─────────────────────────────────────────────
-# Generate radar data
-radar_data, conventional, quantum = generate_radar_frame(
-    range_km, target_x, target_y, target, noise_level=0.03
-)
-
-# Apply PDP filter
-enhanced, dark_mode = pdp_enhance(radar_data, conventional, quantum, epsilon, B_field, m_dark)
-
-# Detect target
-detection = detect_target(dark_mode, threshold)
-detection_confidence = detection['confidence']
-
-# Update history
-if st.session_state.radar_active and (current_time - st.session_state.last_update >= update_interval):
-    st.session_state.detection_history.append({
-        'time': datetime.now(),
-        'confidence': detection_confidence,
-        'frame': st.session_state.frame_count
-    })
-    if len(st.session_state.detection_history) > 50:
-        st.session_state.detection_history.pop(0)
-    st.session_state.frame_count += 1
-    st.session_state.last_update = current_time
+if st.session_state.scan_requested or (st.session_state.live_mode and (current_time - st.session_state.last_scan >= 10)):
+    with st.spinner(f"Scanning radar at {selected_airport}..."):
+        if data_source == "🌍 Live ADSB Feed":
+            aircraft = fetch_adsb_aircraft(radar_lat, radar_lon, range_km)
+            if not aircraft:
+                st.info("No ADSB data available - using simulated aircraft")
+                aircraft = generate_simulated_aircraft(radar_lat, radar_lon, range_km)
+        else:
+            aircraft = generate_simulated_aircraft(radar_lat, radar_lon, range_km)
+        
+        # Apply PDP stealth detection
+        aircraft = apply_pdp_stealth_detection(aircraft, target, epsilon, B_field, m_dark)
+        
+        st.session_state.aircraft_data = aircraft
+        st.session_state.scan_requested = False
+        st.session_state.last_scan = current_time
+        st.session_state.last_update_time = datetime.now()
 
 
 # ── MAIN DISPLAY ─────────────────────────────────────────────
 st.title("🛸 StealthPDPRadar")
-st.markdown(f"*Live Quantum Radar – {location_preset}*")
-st.markdown(f"**Target:** {target} | **Range:** {range_km} km")
+st.markdown(f"*Live Radar – {selected_airport}*")
+st.markdown(f"**Searching for:** {target} | **Range:** {range_km} km | **Source:** {data_source}")
 st.markdown("---")
 
-# Metrics
-max_P = (epsilon * B_field / 1e15)**2
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.metric("Max γ→A'", f"{max_P:.2e}")
-with col2:
-    st.metric("Dark Photon Mass", f"{m_dark:.1e} eV")
-with col3:
-    st.metric("ε Mixing", f"{epsilon:.1e}")
-with col4:
-    st.metric("Detection Range", f"{range_km} km")
-
-# Live indicator and target position
-if st.session_state.radar_active:
-    st.markdown('<div><span class="live-indicator"></span> <strong>RADAR ACTIVE</strong> - Target moving</div>', unsafe_allow_html=True)
+# Live indicator
+if st.session_state.live_mode:
+    st.markdown('<div><span class="live-indicator"></span> <strong>LIVE MODE ACTIVE</strong> - Auto-updating every 10 seconds</div>', unsafe_allow_html=True)
 else:
-    st.info("⏸️ **RADAR STOPPED** - Click START to begin moving target")
+    st.info("🔄 **MANUAL MODE** - Click 'SCAN NOW' to update")
 
-st.caption(f"📍 **Target Position:** X = {target_x:.1f} km, Y = {target_y:.1f} km")
-st.caption(f"📡 **Frame:** {st.session_state.frame_count} | **Last Update:** {datetime.now().strftime('%H:%M:%S')}")
-
+st.caption(f"📡 Last scan: {st.session_state.last_update_time.strftime('%H:%M:%S') if hasattr(st.session_state, 'last_update_time') else 'Never'}")
 st.markdown("---")
 
 
-# ── RADAR VISUALIZATIONS ─────────────────────────────────────────────
-st.markdown("### 📡 Radar Display")
+# ── RADAR DISPLAY ─────────────────────────────────────────────
+st.markdown("### 📡 Radar View")
 
-col1, col2, col3 = st.columns(3)
+# Create radar background
+size = 600
+fig, ax = plt.subplots(figsize=(8, 8), facecolor='#0a0a1a')
+ax.set_facecolor('#0a0a1a')
+ax.set_xlim(-range_km, range_km)
+ax.set_ylim(-range_km, range_km)
+ax.set_aspect('equal')
 
-def show_radar(img, title, cmap, show_target=False, target_pos=None, range_km=300):
-    fig, ax = plt.subplots(figsize=(5, 5), facecolor='#0a0a1a')
-    im = ax.imshow(img, cmap=cmap, extent=[-range_km, range_km, -range_km, range_km])
-    plt.colorbar(im, ax=ax, label="Signal")
-    
-    if show_target and target_pos:
-        circle = Circle(target_pos, range_km/15, fill=False, edgecolor='red', linewidth=2)
-        ax.add_patch(circle)
-        ax.plot(target_pos[0], target_pos[1], 'r*', markersize=10)
-    
-    ax.set_title(title, color='white')
-    ax.set_xlabel("Range East-West (km)", color='white')
-    ax.set_ylabel("Range North-South (km)", color='white')
-    ax.tick_params(colors='white')
-    st.pyplot(fig)
-    plt.close(fig)
-
-# Conventional Radar
-with col1:
-    show_radar(radar_data, "Conventional Radar", 'gray', True, (target_x, target_y), range_km)
-    st.caption("⚪ Stealth target invisible")
-
-# Dark-Mode Leakage (PDP Filter)
-with col2:
-    show_radar(dark_mode, "Dark-Mode Leakage", 'plasma', True, (target_x, target_y), range_km)
-    st.caption("✨ Quantum signature reveals target")
-
-# PDP Quantum Radar
-with col3:
-    rgb = np.stack([radar_data, dark_mode, enhanced], axis=-1)
-    fig, ax = plt.subplots(figsize=(5, 5), facecolor='#0a0a1a')
-    ax.imshow(np.clip(rgb, 0, 1), extent=[-range_km, range_km, -range_km, range_km])
-    circle = Circle((target_x, target_y), range_km/15, fill=False, edgecolor='red', linewidth=2)
+# Draw range rings
+for r in [range_km/4, range_km/2, 3*range_km/4, range_km]:
+    circle = Circle((0, 0), r, fill=False, edgecolor='#335588', linestyle='--', linewidth=1)
     ax.add_patch(circle)
-    ax.plot(target_x, target_y, 'r*', markersize=10)
-    ax.set_title("PDP Quantum Radar", color='white')
-    ax.set_xlabel("Range East-West (km)", color='white')
-    ax.set_ylabel("Range North-South (km)", color='white')
-    ax.tick_params(colors='white')
-    st.pyplot(fig)
-    plt.close(fig)
-    st.caption("🌈 Blue-halo fusion - target detected")
+
+# Draw crosshairs
+ax.axhline(y=0, color='#335588', linewidth=0.5)
+ax.axvline(x=0, color='#335588', linewidth=0.5)
+
+# Radar center
+ax.plot(0, 0, 'o', color='#00aaff', markersize=8, label='Radar Site')
+
+# Plot aircraft
+for ac in st.session_state.aircraft_data:
+    x = ac['x_km']
+    y = ac['y_km']
+    
+    # Color based on stealth detection
+    if ac.get('stealth_probability', 0) > threshold:
+        color = '#ff4444'  # Red - potential stealth
+        marker = 's'
+        size = 100
+        zorder = 10
+    elif ac['type'] in ["Commercial Airliner", "Private Jet"]:
+        color = '#88ff88'  # Green - civilian
+        marker = 'o'
+        size = 60
+        zorder = 5
+    elif ac['type'] == "Military Transport":
+        color = '#ffaa44'  # Orange - military
+        marker = '^'
+        size = 70
+        zorder = 6
+    else:
+        color = '#44aaff'  # Blue - other
+        marker = 'o'
+        size = 50
+        zorder = 5
+    
+    ax.scatter(x, y, c=color, marker=marker, s=size, alpha=0.9, edgecolors='white', linewidth=0.5)
+    
+    # Add callsign label
+    ax.annotate(ac['callsign'], (x, y), xytext=(5, 5), textcoords='offset points',
+                fontsize=8, color='white', alpha=0.8)
+
+# Add legend
+legend_elements = [
+    plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#88ff88', markersize=8, label='Civilian'),
+    plt.Line2D([0], [0], marker='^', color='w', markerfacecolor='#ffaa44', markersize=8, label='Military'),
+    plt.Line2D([0], [0], marker='s', color='w', markerfacecolor='#ff4444', markersize=8, label=f'Potential {target}'),
+]
+ax.legend(handles=legend_elements, loc='upper right', facecolor='#1a1a3a', labelcolor='white')
+
+ax.set_xlabel("East-West (km)", color='white')
+ax.set_ylabel("North-South (km)", color='white')
+ax.tick_params(colors='white')
+
+st.pyplot(fig)
+plt.close(fig)
 
 
-# ── DETECTION ANALYSIS ─────────────────────────────────────────────
+# ── AIRCRAFT TABLE ─────────────────────────────────────────────
 st.markdown("---")
-st.markdown("### 🎯 Detection Analysis")
+st.markdown("### ✈️ Aircraft Detected")
 
-col_m1, col_m2, col_m3 = st.columns(3)
-
-with col_m1:
-    st.metric("Detection Confidence", f"{detection_confidence:.1f}%")
-
-with col_m2:
-    quantum_sig = np.max(dark_mode)
-    st.metric("Quantum Signature", f"{quantum_sig:.4f}")
-
-with col_m3:
-    conventional_sig = np.max(radar_data)
-    st.metric("Conventional RCS", f"{conventional_sig:.4f}")
-
-# Threat Assessment
-if detection_confidence > 50:
-    st.error(f"⚠️ **HIGH ALERT:** {target} detected at {range_km} km near {location_preset}!")
-elif detection_confidence > 20:
-    st.warning(f"⚠️ **MEDIUM ALERT:** Possible {target} signature detected")
-elif detection_confidence > 5:
-    st.info(f"ℹ️ **LOW ALERT:** Weak quantum signature detected")
+if st.session_state.aircraft_data:
+    # Create display dataframe
+    df = pd.DataFrame(st.session_state.aircraft_data)
+    
+    # Select columns to show
+    display_cols = ['callsign', 'type', 'x_km', 'y_km', 'altitude', 'speed', 'stealth_probability']
+    df_display = df[display_cols].copy()
+    df_display['x_km'] = df_display['x_km'].round(1)
+    df_display['y_km'] = df_display['y_km'].round(1)
+    df_display['stealth_probability'] = df_display['stealth_probability'].round(1)
+    
+    # Highlight potential stealth
+    def highlight_stealth(val):
+        if val > threshold:
+            return 'background-color: #ff4444'
+        return ''
+    
+    st.dataframe(df_display.style.applymap(highlight_stealth, subset=['stealth_probability']), use_container_width=True)
+    
+    # Count statistics
+    total = len(df)
+    potential = len(df[df['stealth_probability'] > threshold])
+    civilian = len(df[df['type'] == "Commercial Airliner"])
+    military = len(df[df['type'] == "Military Transport"])
+    
+    st.markdown(f"**Summary:** {total} total | ✈️ {civilian} civilian | 🎖️ {military} military | ⚠️ {potential} potential {target} signatures")
 else:
-    st.success(f"✅ **CLEAR:** No {target} signatures detected")
+    st.info("No aircraft detected in this area")
 
 
-# ── DETECTION HISTORY GRAPH ─────────────────────────────────────────────
-if st.session_state.detection_history:
+# ── STEALTH ALERT ─────────────────────────────────────────────
+potential_stealth = [ac for ac in st.session_state.aircraft_data if ac.get('stealth_probability', 0) > threshold]
+
+if potential_stealth:
     st.markdown("---")
-    st.markdown("### 📈 Detection History")
+    st.markdown("### 🚨 STEALTH DETECTION ALERT")
     
-    history_df = pd.DataFrame(st.session_state.detection_history[-30:])
-    
-    fig, ax = plt.subplots(figsize=(10, 4), facecolor='#0a0a1a')
-    ax.plot(history_df['frame'], history_df['confidence'], 'b-', linewidth=2, marker='o', markersize=4)
-    ax.axhline(y=10, color='red', linestyle='--', label='Detection Threshold')
-    ax.set_xlabel("Frame Number", color='white')
-    ax.set_ylabel("Detection Confidence (%)", color='white')
-    ax.set_title("Live Detection Confidence Over Time", color='white')
-    ax.legend()
-    ax.tick_params(colors='white')
-    ax.set_facecolor('#1a1a3a')
-    ax.grid(True, alpha=0.3)
-    st.pyplot(fig)
-    plt.close(fig)
+    for ac in potential_stealth:
+        st.markdown(f"""
+        <div class="stealth-alert">
+        ⚠️ **POTENTIAL {target} DETECTED**<br>
+        📍 Position: {ac['x_km']:.1f} km E, {ac['y_km']:.1f} km N<br>
+        🎯 Signature: {ac['stealth_probability']:.1f}% match<br>
+        📡 Callsign: {ac['callsign']} | Type: {ac['type']}
+        </div>
+        """, unsafe_allow_html=True)
 
 
 # ── EXPORT ─────────────────────────────────────────────
 st.markdown("---")
-st.markdown("### 💾 Export Results")
+st.markdown("### 💾 Export Data")
 
-col_e1, col_e2, col_e3 = st.columns(3)
-
-def save_array_png(arr, cmap='inferno'):
-    fig, ax = plt.subplots(figsize=(8, 8), facecolor='black')
-    ax.imshow(arr, cmap=cmap, vmin=0, vmax=1)
-    ax.axis('off')
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', facecolor='black')
-    plt.close(fig)
-    return buf.getvalue()
+col_e1, col_e2 = st.columns(2)
 
 with col_e1:
-    st.download_button("📸 Download Radar Image", save_array_png(enhanced), "pdp_radar.png", width='stretch')
+    if st.session_state.aircraft_data:
+        df_export = pd.DataFrame(st.session_state.aircraft_data)
+        csv_data = df_export.to_csv(index=False).encode()
+        st.download_button("📊 Export Aircraft Data (CSV)", csv_data, f"radar_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", width='stretch')
 
 with col_e2:
-    metadata = {
-        "timestamp": str(datetime.now()),
-        "location": location_preset,
+    report = {
+        "timestamp": datetime.now().isoformat(),
+        "location": selected_airport,
+        "coordinates": {"lat": radar_lat, "lon": radar_lon},
+        "range_km": range_km,
         "target": target,
-        "target_x": target_x,
-        "target_y": target_y,
-        "detection_confidence": detection_confidence,
-        "radar_active": st.session_state.radar_active
+        "total_aircraft": len(st.session_state.aircraft_data),
+        "potential_stealth": len(potential_stealth),
+        "detections": [
+            {
+                "callsign": ac['callsign'],
+                "x_km": ac['x_km'],
+                "y_km": ac['y_km'],
+                "stealth_probability": ac.get('stealth_probability', 0)
+            }
+            for ac in potential_stealth
+        ]
     }
-    st.download_button("📋 Export Metadata", json.dumps(metadata, indent=2), "radar_metadata.json", width='stretch')
-
-with col_e3:
-    df_export = pd.DataFrame(radar_data)
-    csv_data = df_export.to_csv(index=False).encode()
-    st.download_button("📊 Export Radar Data", csv_data, "radar_data.csv", width='stretch')
+    st.download_button("📋 Export Report (JSON)", json.dumps(report, indent=2), "radar_report.json", width='stretch')
 
 
-# ── AUTO-REFRESH ─────────────────────────────────────────────
-if st.session_state.radar_active:
-    time.sleep(update_interval)
+# ── AUTO-REFRESH FOR LIVE MODE ─────────────────────────────────────────────
+if st.session_state.live_mode:
+    time.sleep(1)
     st.rerun()
 
 st.markdown("---")
-st.markdown("🛸 **StealthPDPRadar v7.0** | Live Moving Radar | Start/Stop | Tony Ford Model")
+st.markdown("🛸 **StealthPDPRadar v8.0** | Live ADSB | Real Aircraft | PDP Stealth Detection | Tony Ford Model")
