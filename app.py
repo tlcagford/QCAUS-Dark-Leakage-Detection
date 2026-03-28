@@ -1,6 +1,6 @@
 """
-StealthPDPRadar v21.0 – WORKING REAL RADAR DATA
-OpenSky Network | Real aircraft | Delayed for reliability
+StealthPDPRadar v23.0 – REAL AIRCRAFT DETECTION
+OpenSky Network | Live aircraft | Delayed for reliability
 """
 
 import streamlit as st
@@ -11,7 +11,7 @@ import io
 import json
 import pandas as pd
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import warnings
 import requests
 
@@ -20,7 +20,7 @@ warnings.filterwarnings('ignore')
 # ── PAGE CONFIG ─────────────────────────────────────────────
 st.set_page_config(
     layout="wide",
-    page_title="StealthPDPRadar v21.0",
+    page_title="StealthPDPRadar v23.0",
     page_icon="🛸",
     initial_sidebar_state="expanded"
 )
@@ -44,9 +44,18 @@ st.markdown("""
     .real-badge {
         background-color: #00aa44;
         color: white;
-        padding: 4px 8px;
-        border-radius: 12px;
-        font-size: 10px;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        display: inline-block;
+        font-weight: bold;
+    }
+    .sim-badge {
+        background-color: #aa8844;
+        color: white;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 12px;
         display: inline-block;
     }
     .live-indicator {
@@ -54,7 +63,7 @@ st.markdown("""
         width: 10px;
         height: 10px;
         border-radius: 50%;
-        background-color: #00ff00;
+        background-color: #ff4444;
         animation: pulse 1s infinite;
         margin-right: 8px;
     }
@@ -63,12 +72,12 @@ st.markdown("""
         50% { opacity: 0.3; }
         100% { opacity: 1; }
     }
-    .data-status {
-        background-color: #1a3a2a;
-        padding: 8px;
+    .data-card {
+        background-color: #1a2a3a;
+        padding: 10px;
         border-radius: 8px;
         margin: 10px 0;
-        text-align: center;
+        border-left: 4px solid #00aaff;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -96,19 +105,16 @@ STEALTH_SIGNATURES = {
 }
 
 
-# ── WORKING REAL DATA FETCHER WITH DELAY ─────────────────────────────────────────────
-@st.cache_data(ttl=15)
-def fetch_real_aircraft_data(lat, lon, radius_km):
+# ── REAL DATA FETCHER (WITH RETRY LOGIC) ─────────────────────────────────────────────
+@st.cache_data(ttl=12)
+def fetch_real_aircraft(lat, lon, radius_km):
     """
     Fetch REAL aircraft from OpenSky Network
-    Using the live states endpoint with timeout
+    Returns (aircraft_list, source_name, is_real)
     """
     try:
-        # OpenSky Network - No API key required
         url = "https://opensky-network.org/api/states/all"
-        
-        # Add timeout to prevent hanging
-        response = requests.get(url, timeout=8)
+        response = requests.get(url, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
@@ -127,14 +133,13 @@ def fetch_real_aircraft_data(lat, lon, radius_km):
                 heading = state[10] if state[10] else 0
                 
                 if lat_pos and lon_pos and velocity > 0:
-                    # Calculate relative position
                     dx = (lon_pos - lon) * 85
                     dy = (lat_pos - lat) * 111
                     distance = np.sqrt(dx**2 + dy**2)
                     
                     if distance <= radius_km:
                         # Determine aircraft type
-                        if any(x in callsign.upper() for x in ['RCH', 'AF', 'CFC', 'RRR', 'NATO', 'USAF']):
+                        if any(x in callsign.upper() for x in ['RCH', 'AF', 'CFC', 'RRR', 'NATO', 'USAF', 'NAVY']):
                             ac_type = "Military"
                         elif callsign and callsign[0] == 'N':
                             ac_type = "Private"
@@ -155,30 +160,76 @@ def fetch_real_aircraft_data(lat, lon, radius_km):
                         })
             
             if aircraft:
-                return aircraft, f"OpenSky Network ({len(aircraft)} real aircraft)"
+                return aircraft, f"OpenSky Network ({len(aircraft)} live aircraft)", True
             else:
-                return None, "No aircraft in range (try a busier airport like LAX or JFK)"
+                return None, "No aircraft in range - try a busier airport", False
                 
     except requests.exceptions.Timeout:
-        return None, "OpenSky API timeout - API is rate limited, waiting..."
+        return None, "OpenSky API timeout (rate limited) - waiting...", False
     except Exception as e:
-        return None, f"API connection issue: {str(e)[:50]}"
+        return None, f"Connection issue: {str(e)[:40]}", False
     
-    return None, "No data received - API may be busy"
+    return None, "No data received", False
+
+
+def generate_demo_aircraft(lat, lon, radius_km):
+    """Generate realistic demo aircraft when real data unavailable"""
+    aircraft = []
+    # Use realistic airline codes
+    airlines = ['UAL', 'DAL', 'AAL', 'SWA', 'JBU', 'BAW', 'AFR', 'DLH', 'SIA']
+    military = ['RCH', 'AF1', 'CFC', 'RRR']
+    
+    num = np.random.randint(18, 32)
+    
+    for i in range(num):
+        angle = np.random.uniform(0, 2*np.pi)
+        dist = np.random.uniform(15, radius_km - 15)
+        x = dist * np.cos(angle)
+        y = dist * np.sin(angle)
+        
+        if np.random.random() < 0.15:
+            ac_type = "Military"
+            callsign = f"{np.random.choice(military)}{np.random.randint(100, 999)}"
+            alt = np.random.randint(20000, 40000)
+            spd = np.random.randint(400, 550)
+        elif np.random.random() < 0.7:
+            ac_type = "Commercial"
+            callsign = f"{np.random.choice(airlines)}{np.random.randint(100, 999)}"
+            alt = np.random.randint(28000, 41000)
+            spd = np.random.randint(420, 560)
+        else:
+            ac_type = "Private"
+            callsign = f"N{np.random.randint(1000, 9999)}"
+            alt = np.random.randint(5000, 25000)
+            spd = np.random.randint(180, 350)
+        
+        heading = np.random.uniform(0, 360)
+        
+        aircraft.append({
+            'callsign': callsign,
+            'x_km': x,
+            'y_km': y,
+            'altitude': alt,
+            'speed': spd,
+            'heading': heading,
+            'type': ac_type,
+            'is_real': False
+        })
+    
+    return aircraft, f"Demo Mode (Realistic simulation)", False
 
 
 def update_aircraft_movement(aircraft, dt, range_km):
-    """Update positions for real aircraft (slight movement)"""
+    """Update aircraft positions"""
     for ac in aircraft:
-        if ac.get('is_real', False):
-            speed_kms = ac['speed'] * 0.514 * 0.1
-            distance = speed_kms * dt
-            heading_rad = np.radians(ac['heading'])
-            ac['x_km'] += distance * np.cos(heading_rad)
-            ac['y_km'] += distance * np.sin(heading_rad)
-            
-            ac['x_km'] = np.clip(ac['x_km'], -range_km, range_km)
-            ac['y_km'] = np.clip(ac['y_km'], -range_km, range_km)
+        speed_kms = ac['speed'] * 0.514 * 0.15
+        distance = speed_kms * dt
+        heading_rad = np.radians(ac['heading'])
+        ac['x_km'] += distance * np.cos(heading_rad)
+        ac['y_km'] += distance * np.sin(heading_rad)
+        
+        ac['x_km'] = np.clip(ac['x_km'], -range_km, range_km)
+        ac['y_km'] = np.clip(ac['y_km'], -range_km, range_km)
     
     return aircraft
 
@@ -210,7 +261,6 @@ def detect_stealth(aircraft, epsilon=1e-10):
             ac['stealth_prob'] = min(prob * best_score, 99)
             ac['is_stealth'] = ac['stealth_prob'] > 20
             ac['detected_platform'] = best_match if ac['is_stealth'] else None
-            
         else:
             ac['stealth_prob'] = min(mixing * 40, 70)
             ac['is_stealth'] = ac['stealth_prob'] > 20
@@ -221,8 +271,8 @@ def detect_stealth(aircraft, epsilon=1e-10):
 
 # ── SIDEBAR ─────────────────────────────────────────────
 with st.sidebar:
-    st.title("🛸 StealthPDPRadar v21.0")
-    st.markdown("*Real Radar Data*")
+    st.title("🛸 StealthPDPRadar v23.0")
+    st.markdown("*REAL AIRCRAFT DETECTION*")
     st.markdown("---")
     
     selected_airport = st.selectbox("Radar Location", list(AIRPORTS.keys()), index=0)
@@ -236,53 +286,59 @@ with st.sidebar:
     
     if st.button("🔄 FETCH REAL DATA", use_container_width=True):
         st.cache_data.clear()
-        st.session_state.last_fetch = 0
-        st.session_state.manual_refresh = True
+        st.session_state.force_refresh = True
     
     st.markdown("---")
     st.markdown("📡 **Source:** OpenSky Network")
     st.markdown("🔴 **Real aircraft from live feed**")
-    st.markdown("⏱️ **Data delay:** 5-10 seconds (API rate limited)")
-    st.caption("Tony Ford | v21.0 | Working Real Data")
+    st.markdown("⏱️ **Delay:** 10-15 seconds (API rate limit)")
+    st.caption("Tony Ford | v23.0 | Real Aircraft")
 
 
 # ── INITIALIZE SESSION STATE ─────────────────────────────────────────────
 if 'aircraft' not in st.session_state:
     st.session_state.aircraft = []
 if 'data_source' not in st.session_state:
-    st.session_state.data_source = "Click FETCH REAL DATA to start"
+    st.session_state.data_source = "Click FETCH REAL DATA to see live aircraft"
+if 'is_real_data' not in st.session_state:
+    st.session_state.is_real_data = False
 if 'last_fetch' not in st.session_state:
     st.session_state.last_fetch = 0
 if 'last_update' not in st.session_state:
     st.session_state.last_update = time.time()
-if 'manual_refresh' not in st.session_state:
-    st.session_state.manual_refresh = False
+if 'force_refresh' not in st.session_state:
+    st.session_state.force_refresh = False
 
 
-# ── FETCH REAL RADAR DATA ─────────────────────────────────────────────
+# ── FETCH REAL DATA ─────────────────────────────────────────────
 current_time = time.time()
 
-# Auto-refresh every 15 seconds OR manual refresh
-if st.session_state.manual_refresh or (current_time - st.session_state.last_fetch >= 15):
-    with st.spinner("📡 Fetching REAL aircraft data from OpenSky Network..."):
-        aircraft, source = fetch_real_aircraft_data(airport['lat'], airport['lon'], range_km)
+if st.session_state.force_refresh or (current_time - st.session_state.last_fetch >= 12):
+    with st.spinner("📡 Fetching REAL aircraft from OpenSky Network..."):
+        aircraft, source, is_real = fetch_real_aircraft(airport['lat'], airport['lon'], range_km)
         
         if aircraft:
             st.session_state.aircraft = aircraft
             st.session_state.data_source = source
+            st.session_state.is_real_data = is_real
             st.session_state.last_fetch = current_time
         else:
-            st.session_state.data_source = source
+            # Fallback to demo
+            demo_aircraft, demo_source, _ = generate_demo_aircraft(airport['lat'], airport['lon'], range_km)
+            st.session_state.aircraft = demo_aircraft
+            st.session_state.data_source = demo_source
+            st.session_state.is_real_data = False
+            st.session_state.last_fetch = current_time
         
-        st.session_state.manual_refresh = False
+        st.session_state.force_refresh = False
 
 
-# ── UPDATE MOVEMENT (if real data exists) ─────────────────────────────────────────────
+# ── UPDATE MOVEMENT ─────────────────────────────────────────────
 if st.session_state.aircraft:
     current_time = time.time()
-    dt = min(current_time - st.session_state.last_update, 5.0)
+    dt = min(current_time - st.session_state.last_update, 2.0)
     
-    if dt >= 2.0:
+    if dt >= 1.5:
         st.session_state.aircraft = update_aircraft_movement(
             st.session_state.aircraft, dt, range_km
         )
@@ -291,27 +347,33 @@ if st.session_state.aircraft:
 
 
 # ── APPLY STEALTH DETECTION ─────────────────────────────────────────────
-aircraft = detect_stealth(st.session_state.aircraft, epsilon) if st.session_state.aircraft else []
+aircraft = detect_stealth(st.session_state.aircraft, epsilon)
 
 
 # ── MAIN DISPLAY ─────────────────────────────────────────────
 st.title("🛸 StealthPDPRadar")
-st.markdown(f"*REAL RADAR DATA – {selected_airport}*")
+st.markdown(f"*REAL AIRCRAFT DETECTION – {selected_airport}*")
 st.markdown(f"**Range:** {range_km} km")
 st.markdown("---")
 
-# Data status display
-if aircraft and any(a.get('is_real', False) for a in aircraft):
+# Data Source Status
+if st.session_state.is_real_data:
     st.markdown(f"""
-    <div class="data-status">
+    <div class="data-card">
     <span class="live-indicator"></span> 
-    <strong>LIVE REAL RADAR ACTIVE</strong><br>
-    {st.session_state.data_source}
+    <span class="real-badge">✓ REAL AIRCRAFT DATA</span><br>
+    📡 {st.session_state.data_source}<br>
+    ⏱️ Data updated every 12 seconds | Real aircraft from OpenSky Network
     </div>
     """, unsafe_allow_html=True)
 else:
-    st.warning(f"⚠️ {st.session_state.data_source}")
-    st.info("💡 **Tip:** Try a busy airport like Los Angeles (LAX) or New York (JFK) for more aircraft")
+    st.markdown(f"""
+    <div class="data-card">
+    <span class="sim-badge">⚠️ DEMO MODE</span><br>
+    📡 {st.session_state.data_source}<br>
+    🔄 Click "FETCH REAL DATA" to connect to live aircraft
+    </div>
+    """, unsafe_allow_html=True)
 
 # Metrics
 col1, col2, col3, col4 = st.columns(4)
@@ -319,13 +381,13 @@ with col1:
     st.metric("✈️ Total", len(aircraft))
 with col2:
     real_count = len([a for a in aircraft if a.get('is_real', False)])
-    st.metric("📡 REAL", real_count)
+    st.metric("📡 REAL", real_count, delta="LIVE" if real_count > 0 else None)
 with col3:
     military = len([a for a in aircraft if a['type'] == "Military"])
     st.metric("🎖️ Military", military)
 with col4:
     stealth = len([a for a in aircraft if a.get('is_stealth', False)])
-    st.metric("🚨 Stealth", stealth, delta="ALERT" if stealth > 0 else None)
+    st.metric("🚨 Stealth", stealth, delta="DETECTED" if stealth > 0 else None)
 
 st.markdown("---")
 
@@ -369,8 +431,13 @@ for ac in aircraft:
         marker = 'o'
         size = 90
     
+    # Add star for real aircraft
+    label = ac['callsign']
+    if ac.get('is_real', False):
+        label = f"★ {label}"
+    
     ax.scatter(x, y, c=color, marker=marker, s=size, alpha=0.9, edgecolors='white', linewidth=0.8)
-    ax.annotate(ac['callsign'], (x, y), xytext=(5, 5), textcoords='offset points',
+    ax.annotate(label, (x, y), xytext=(5, 5), textcoords='offset points',
                 fontsize=8, color='white')
 
 # Legend
@@ -378,6 +445,7 @@ legend_elements = [
     plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#88ff88', markersize=10, label='Civilian'),
     plt.Line2D([0], [0], marker='^', color='w', markerfacecolor='#ffaa44', markersize=10, label='Military'),
     plt.Line2D([0], [0], marker='s', color='w', markerfacecolor='#ff4444', markersize=10, label='🚨 STEALTH'),
+    plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='#ffff00', markersize=10, label='★ REAL AIRCRAFT'),
 ]
 ax.legend(handles=legend_elements, loc='upper right', facecolor='#1a1a3a', labelcolor='white')
 ax.set_xlabel("km", color='white')
@@ -394,14 +462,15 @@ stealth_aircraft = [a for a in aircraft if a.get('is_stealth', False)]
 
 if stealth_aircraft:
     st.markdown("---")
-    st.markdown("### 🚨 REAL-TIME STEALTH DETECTIONS")
+    st.markdown("### 🚨 STEALTH DETECTIONS")
     
     for ac in stealth_aircraft[:10]:
         platform = ac.get('detected_platform', 'Unknown')
         conf = int(ac['stealth_prob'])
+        real_tag = "🔴 REAL" if ac.get('is_real', False) else "🟡 DEMO"
         st.markdown(f"""
         <div class="stealth-alert">
-        🔴 **{platform}** ({conf}% match) • {ac['callsign']}<br>
+        {real_tag} ⚠️ **{platform}** ({conf}% match) • {ac['callsign']}<br>
         📍 {ac['x_km']:.0f} km E, {ac['y_km']:.0f} km N • 🛸 {ac['altitude']:,} ft • {ac['speed']} kt
         </div>
         """, unsafe_allow_html=True)
@@ -409,7 +478,7 @@ if stealth_aircraft:
 
 # ── AIRCRAFT TABLE ─────────────────────────────────────────────
 st.markdown("---")
-st.markdown("### ✈️ Real Aircraft in Range")
+st.markdown("### ✈️ Aircraft in Range")
 
 if aircraft:
     data = []
@@ -429,6 +498,13 @@ if aircraft:
     df = pd.DataFrame(data)
     df = df.sort_values('Stealth %', ascending=False)
     st.dataframe(df, use_container_width=True, height=400)
+    
+    # Show count of real aircraft
+    real_count = len([a for a in aircraft if a.get('is_real', False)])
+    if real_count > 0:
+        st.caption(f"★ {real_count} real aircraft from OpenSky Network")
+    else:
+        st.caption("🔄 Click 'FETCH REAL DATA' to see live aircraft")
 
 
 # ── EXPORT ─────────────────────────────────────────────
@@ -438,21 +514,21 @@ st.markdown("### 💾 Export Data")
 col_e1, col_e2 = st.columns(2)
 
 with col_e1:
-    if aircraft:
-        csv = pd.DataFrame(data).to_csv(index=False).encode()
-        st.download_button("📊 Export CSV", csv, f"real_radar_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+    csv = pd.DataFrame(data).to_csv(index=False).encode()
+    st.download_button("📊 Export CSV", csv, f"radar_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
 
 with col_e2:
     report = {
         "timestamp": str(datetime.now()),
         "location": selected_airport,
         "data_source": st.session_state.data_source,
+        "is_real_data": st.session_state.is_real_data,
         "total": len(aircraft),
-        "real": len([a for a in aircraft if a.get('is_real', False)]),
+        "real_aircraft": real_count,
         "stealth": len(stealth_aircraft)
     }
-    st.download_button("📋 Report", json.dumps(report, indent=2), "stealth_report.json")
+    st.download_button("📋 Report", json.dumps(report, indent=2), "radar_report.json")
 
 
 st.markdown("---")
-st.markdown("🛸 **StealthPDPRadar v21.0** | OpenSky Network | Real Aircraft (5-10s delay) | Tony Ford Model")
+st.markdown("🛸 **StealthPDPRadar v23.0** | Real Aircraft from OpenSky Network | ★ Indicates Live Data | Tony Ford Model")
