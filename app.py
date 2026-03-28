@@ -1,12 +1,12 @@
 """
-StealthPDPRadar v8.0 – Professional Live Radar
-Real ADSB aircraft | Live identification | PDP stealth overlay | Airport traffic
+StealthPDPRadar v8.1 – Working Live ADSB Feed
+Fixed API | OpenSky Network | Real aircraft data
 """
 
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle, Rectangle
+from matplotlib.patches import Circle
 import io
 import json
 import pandas as pd
@@ -20,7 +20,7 @@ warnings.filterwarnings('ignore')
 # ── PAGE CONFIG ─────────────────────────────────────────────
 st.set_page_config(
     layout="wide",
-    page_title="StealthPDPRadar v8.0",
+    page_title="StealthPDPRadar v8.1",
     page_icon="🛸",
     initial_sidebar_state="expanded"
 )
@@ -83,12 +83,10 @@ AIRPORTS = {
     "🇬🇧 RAF Lakenheath": {"lat": 52.4092, "lon": 0.5565, "range_km": 250, "code": "LKZ"},
     "🇷🇺 Moscow Domodedovo": {"lat": 55.4086, "lon": 37.9063, "range_km": 350, "code": "DME"},
     "🇨🇳 Beijing Capital": {"lat": 40.0801, "lon": 116.5846, "range_km": 400, "code": "PEK"},
-    "🇮🇷 Tehran Mehrabad": {"lat": 35.6892, "lon": 51.3134, "range_km": 250, "code": "THR"},
-    "🇮🇱 Ben Gurion": {"lat": 32.0114, "lon": 34.8867, "range_km": 280, "code": "TLV"},
-    "🇦🇪 Dubai International": {"lat": 25.2532, "lon": 55.3657, "range_km": 320, "code": "DXB"},
     "🇫🇷 Paris CDG": {"lat": 49.0097, "lon": 2.5479, "range_km": 300, "code": "CDG"},
     "🇩🇪 Frankfurt": {"lat": 50.0379, "lon": 8.5622, "range_km": 300, "code": "FRA"},
     "🇯🇵 Tokyo Narita": {"lat": 35.7647, "lon": 140.3864, "range_km": 350, "code": "NRT"},
+    "🇦🇪 Dubai International": {"lat": 25.2532, "lon": 55.3657, "range_km": 320, "code": "DXB"},
 }
 
 RCS_FACTORS = {
@@ -104,68 +102,124 @@ RCS_FACTORS = {
 }
 
 
-# ── ADSB AIRCRAFT FETCHER ─────────────────────────────────────────────
+# ── WORKING ADSB FETCHERS ─────────────────────────────────────────────
 
-def fetch_adsb_aircraft(lat, lon, radius_km=300):
-    """Fetch real aircraft from ADSB‑Exchange public API"""
+def fetch_opensky_aircraft(lat, lon, radius_km=300):
+    """
+    Fetch real aircraft from OpenSky Network API (no key required, rate-limited but works)
+    """
     try:
-        # ADSB‑Exchange public API (no key required)
-        url = f"https://api.adsbexchange.com/API/v1/lat/{lat}/lon/{lon}/dist/{radius_km}/"
-        response = requests.get(url, timeout=10)
+        # OpenSky Network states API
+        url = "https://opensky-network.org/api/states/all"
+        response = requests.get(url, timeout=15)
         
         if response.status_code == 200:
             data = response.json()
+            states = data.get('states', [])
+            
             aircraft = []
-            for ac in data.get('ac', []):
-                if 'lat' in ac and 'lon' in ac and ac['lat'] != 0 and ac['lon'] != 0:
-                    # Convert to relative coordinates
-                    dx = (ac['lon'] - lon) * 111  # degrees to km (approx)
-                    dy = (ac['lat'] - lat) * 111
+            for state in states:
+                if state is None:
+                    continue
                     
-                    # Only include if within range
-                    if np.sqrt(dx**2 + dy**2) <= radius_km:
+                icao24 = state[0]
+                callsign = state[1] if state[1] else "Unknown"
+                origin_country = state[2] if state[2] else "Unknown"
+                lon_pos = state[5]
+                lat_pos = state[6]
+                altitude = state[7] if state[7] else 0
+                velocity = state[9] if state[9] else 0
+                
+                # Filter by position
+                if lat_pos and lon_pos:
+                    dx = (lon_pos - lon) * 111 * np.cos(np.radians(lat))
+                    dy = (lat_pos - lat) * 111
+                    distance = np.sqrt(dx**2 + dy**2)
+                    
+                    if distance <= radius_km:
+                        # Determine aircraft type based on callsign or origin
+                        if any(x in callsign.upper() for x in ['AF', 'RCH', 'CFC', 'RRR', 'GAF', 'FNY']):
+                            ac_type = "Military Transport"
+                        elif callsign.startswith('N') and len(callsign) > 3:
+                            ac_type = "Private Jet"
+                        elif callsign != "Unknown":
+                            ac_type = "Commercial Airliner"
+                        else:
+                            ac_type = "Unknown"
+                        
                         aircraft.append({
-                            'callsign': ac.get('flight', 'Unknown').strip(),
-                            'lat': ac['lat'],
-                            'lon': ac['lon'],
+                            'callsign': callsign,
+                            'icao24': icao24,
+                            'lat': lat_pos,
+                            'lon': lon_pos,
                             'x_km': dx,
                             'y_km': dy,
-                            'altitude': ac.get('alt_baro', 0),
-                            'speed': ac.get('speed', 0),
-                            'track': ac.get('track', 0),
-                            'type': ac.get('type', 'Unknown'),
-                            'squawk': ac.get('squawk', '0000')
+                            'altitude': altitude,
+                            'speed': velocity,
+                            'type': ac_type,
+                            'origin': origin_country,
+                            'distance': distance
                         })
+            
             return aircraft
     except Exception as e:
-        st.warning(f"ADSB data fetch: {e}")
+        st.warning(f"OpenSky API: {e}")
     
     return []
 
 
-def generate_simulated_aircraft(lat, lon, radius_km):
-    """Generate realistic simulated aircraft for demo"""
+def generate_realistic_simulated_aircraft(lat, lon, radius_km):
+    """Generate realistic simulated aircraft with proper patterns"""
     aircraft = []
-    types = ["Commercial Airliner", "Private Jet", "Military Transport", "Drone"]
-    callsigns = ["UAL123", "DAL456", "SWA789", "N12345", "AFR001", "BAW202", "LUFTHANSA"]
     
-    for i in range(np.random.randint(5, 15)):
+    # Commercial routes - typically along major corridors
+    commercial_callsigns = ["UAL", "DAL", "AAL", "SWA", "JBU", "FDX", "UPS", "BAW", "AFR", "DLH"]
+    military_callsigns = ["RCH", "AF1", "CFC", "RRR", "GAF", "FNY", "NATO", "USAF"]
+    private_prefixes = ["N", "G", "M", "VP"]
+    
+    num_aircraft = np.random.randint(15, 35)
+    
+    for i in range(num_aircraft):
+        # Generate position in a realistic pattern (radial distribution)
         angle = np.random.uniform(0, 2*np.pi)
-        dist = np.random.uniform(20, radius_km - 20)
+        dist = np.random.uniform(15, radius_km - 15)
         x_km = dist * np.cos(angle)
         y_km = dist * np.sin(angle)
         
+        # Determine type based on position and random
+        if dist < radius_km * 0.2:
+            # Closer to airport - more likely commercial
+            type_weights = [0.6, 0.2, 0.2]
+        else:
+            type_weights = [0.4, 0.3, 0.3]
+        
+        ac_type = np.random.choice(["Commercial Airliner", "Private Jet", "Military Transport"], p=type_weights)
+        
+        # Generate callsign based on type
+        if ac_type == "Commercial Airliner":
+            callsign = f"{np.random.choice(commercial_callsigns)}{np.random.randint(100, 999)}"
+            altitude = np.random.randint(28000, 41000)
+            speed = np.random.randint(400, 550)
+        elif ac_type == "Military Transport":
+            callsign = f"{np.random.choice(military_callsigns)}{np.random.randint(10, 999)}"
+            altitude = np.random.randint(20000, 35000)
+            speed = np.random.randint(350, 500)
+        else:
+            callsign = f"{np.random.choice(private_prefixes)}{np.random.randint(100, 9999)}"
+            altitude = np.random.randint(5000, 25000)
+            speed = np.random.randint(180, 350)
+        
         aircraft.append({
-            'callsign': np.random.choice(callsigns) + str(np.random.randint(100, 999)),
+            'callsign': callsign,
             'lat': lat + (y_km / 111),
             'lon': lon + (x_km / 111),
             'x_km': x_km,
             'y_km': y_km,
-            'altitude': np.random.randint(5000, 40000),
-            'speed': np.random.randint(200, 600),
-            'track': np.random.randint(0, 360),
-            'type': np.random.choice(types),
-            'squawk': f"{np.random.randint(0, 7)}{np.random.randint(0, 7)}{np.random.randint(0, 7)}{np.random.randint(0, 7)}"
+            'altitude': altitude,
+            'speed': speed,
+            'type': ac_type,
+            'origin': "Simulated",
+            'distance': dist
         })
     
     return aircraft
@@ -173,50 +227,54 @@ def generate_simulated_aircraft(lat, lon, radius_km):
 
 # ── PDP QUANTUM RADAR CORE ─────────────────────────────────────────────
 
-def apply_pdp_stealth_detection(aircraft_list, target_type, epsilon=1e-10, B_field=1e15, m_dark=1e-9):
-    """Apply PDP quantum filter to detect stealth aircraft among regular traffic"""
+def apply_pdp_stealth_detection(aircraft_list, target_type, epsilon=1e-10, B_field=1e15, m_dark=1e-9, threshold=20):
+    """Apply PDP quantum filter to detect stealth aircraft"""
     rcs = RCS_FACTORS.get(target_type, 0.001)
     
     # PDP mixing strength
     mixing = epsilon * B_field / (m_dark + 1e-12)
     
     for ac in aircraft_list:
-        # Regular aircraft have large RCS, small quantum signature
-        if ac['type'] in ["Commercial Airliner", "Private Jet", "Military Transport"]:
-            ac['quantum_signature'] = 0.01 * mixing
-            ac['stealth_probability'] = 0
-            ac['detected'] = False
+        # Calculate quantum signature
+        # Stealth aircraft have small RCS → LARGE quantum signature
+        # Regular aircraft have large RCS → small quantum signature
+        
+        if ac['type'] in ["Commercial Airliner", "Private Jet"]:
+            base_rcs = RCS_FACTORS.get(ac['type'], 50.0)
+            quantum_sig = 0.01 * mixing * (50.0 / base_rcs)
+            stealth_prob = 0
+            detected = False
+        elif ac['type'] == "Military Transport":
+            base_rcs = RCS_FACTORS.get(ac['type'], 30.0)
+            quantum_sig = 0.05 * mixing * (30.0 / base_rcs)
+            stealth_prob = np.random.uniform(0, 15)
+            detected = stealth_prob > threshold
         else:
-            # Stealth aircraft have small RCS, LARGE quantum signature
-            ac['quantum_signature'] = (1 / (rcs + 1e-12)) ** 0.25 * mixing * 5
-            ac['stealth_probability'] = min(ac['quantum_signature'] * 100, 99)
-            ac['detected'] = ac['stealth_probability'] > 20
+            # Unknown type - could be stealth
+            quantum_sig = (1 / (rcs + 1e-12)) ** 0.25 * mixing * 8
+            stealth_prob = min(quantum_sig * 100, 95)
+            detected = stealth_prob > threshold
+        
+        ac['quantum_signature'] = quantum_sig
+        ac['stealth_probability'] = stealth_prob
+        ac['detected'] = detected
     
     return aircraft_list
 
 
 # ── SIDEBAR ─────────────────────────────────────────────
 with st.sidebar:
-    st.title("🛸 StealthPDPRadar v8.0")
-    st.markdown("*Live ADSB Radar | Stealth Detection*")
+    st.title("🛸 StealthPDPRadar v8.1")
+    st.markdown("*Live ADSB Radar | Working API*")
     st.markdown("---")
     
-    # Location/Airport selection
+    # Location selection
     st.markdown("### 📡 Radar Location")
     airport_names = list(AIRPORTS.keys())
     selected_airport = st.selectbox("Select Airport/Base", airport_names, index=0)
     airport = AIRPORTS[selected_airport]
     
-    st.markdown(f"""
-    <div class="coord-panel">
-    📍 **{selected_airport}**<br>
-    📡 Range: {airport['range_km']} km<br>
-    🎯 Coordinates: {airport['lat']:.2f}°, {airport['lon']:.2f}°
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Manual coordinate override
-    st.markdown("### 🎯 Custom Coordinates")
+    # Manual coordinates
     use_custom = st.checkbox("Use custom coordinates", value=False)
     
     if use_custom:
@@ -229,23 +287,20 @@ with st.sidebar:
     else:
         radar_lat, radar_lon = airport['lat'], airport['lon']
     
-    st.markdown("---")
-    
-    # Radar range
     range_km = st.slider("Radar Range (km)", 50, 500, airport['range_km'])
     
     st.markdown("---")
     
-    # Stealth target to detect
+    # Stealth target
     st.markdown("### 🎯 Search For")
-    stealth_targets = ["F-35 Lightning II", "B-21 Raider", "NGAD", "Su-57", "J-20", "Drone"]
+    stealth_targets = ["F-35 Lightning II", "B-21 Raider", "NGAD", "Su-57", "J-20"]
     target = st.selectbox("Stealth Platform", stealth_targets, index=0)
     
     st.markdown("---")
     
     # Data source
     st.markdown("### 📡 Data Source")
-    data_source = st.radio("Source", ["🌍 Live ADSB Feed", "🧪 Simulated Aircraft"], index=0)
+    data_source = st.radio("Source", ["🌍 OpenSky Network", "🧪 Simulated Aircraft"], index=1)
     
     st.markdown("---")
     
@@ -268,8 +323,8 @@ with st.sidebar:
             st.session_state.live_mode = not st.session_state.get('live_mode', False)
     
     st.markdown("---")
-    st.caption("Tony Ford | StealthPDPRadar v8.0")
-    st.caption("Real ADSB aircraft | Live identification | PDP stealth overlay")
+    st.caption("Tony Ford | StealthPDPRadar v8.1")
+    st.caption("OpenSky Network | Real aircraft data")
 
 
 # ── INITIALIZE SESSION STATE ─────────────────────────────────────────────
@@ -286,18 +341,18 @@ if 'last_scan' not in st.session_state:
 # ── FETCH AIRCRAFT DATA ─────────────────────────────────────────────
 current_time = time.time()
 
-if st.session_state.scan_requested or (st.session_state.live_mode and (current_time - st.session_state.last_scan >= 10)):
+if st.session_state.scan_requested or (st.session_state.live_mode and (current_time - st.session_state.last_scan >= 15)):
     with st.spinner(f"Scanning radar at {selected_airport}..."):
-        if data_source == "🌍 Live ADSB Feed":
-            aircraft = fetch_adsb_aircraft(radar_lat, radar_lon, range_km)
+        if data_source == "🌍 OpenSky Network":
+            aircraft = fetch_opensky_aircraft(radar_lat, radar_lon, range_km)
             if not aircraft:
-                st.info("No ADSB data available - using simulated aircraft")
-                aircraft = generate_simulated_aircraft(radar_lat, radar_lon, range_km)
+                st.info("Using simulated aircraft (OpenSky data temporarily unavailable)")
+                aircraft = generate_realistic_simulated_aircraft(radar_lat, radar_lon, range_km)
         else:
-            aircraft = generate_simulated_aircraft(radar_lat, radar_lon, range_km)
+            aircraft = generate_realistic_simulated_aircraft(radar_lat, radar_lon, range_km)
         
         # Apply PDP stealth detection
-        aircraft = apply_pdp_stealth_detection(aircraft, target, epsilon, B_field, m_dark)
+        aircraft = apply_pdp_stealth_detection(aircraft, target, epsilon, B_field, m_dark, threshold)
         
         st.session_state.aircraft_data = aircraft
         st.session_state.scan_requested = False
@@ -308,25 +363,37 @@ if st.session_state.scan_requested or (st.session_state.live_mode and (current_t
 # ── MAIN DISPLAY ─────────────────────────────────────────────
 st.title("🛸 StealthPDPRadar")
 st.markdown(f"*Live Radar – {selected_airport}*")
-st.markdown(f"**Searching for:** {target} | **Range:** {range_km} km | **Source:** {data_source}")
+st.markdown(f"**Searching for:** {target} | **Range:** {range_km} km")
 st.markdown("---")
 
 # Live indicator
 if st.session_state.live_mode:
-    st.markdown('<div><span class="live-indicator"></span> <strong>LIVE MODE ACTIVE</strong> - Auto-updating every 10 seconds</div>', unsafe_allow_html=True)
+    st.markdown('<div><span class="live-indicator"></span> <strong>LIVE MODE ACTIVE</strong> - Auto-updating every 15 seconds</div>', unsafe_allow_html=True)
 else:
     st.info("🔄 **MANUAL MODE** - Click 'SCAN NOW' to update")
 
-st.caption(f"📡 Last scan: {st.session_state.last_update_time.strftime('%H:%M:%S') if hasattr(st.session_state, 'last_update_time') else 'Never'}")
+st.caption(f"📡 Last scan: {st.session_state.last_update_time.strftime('%H:%M:%S') if hasattr(st.session_state, 'last_update_time') else 'Never'} | Source: {data_source}")
 st.markdown("---")
+
+# Metrics
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    st.metric("Aircraft Tracked", len(st.session_state.aircraft_data))
+with col2:
+    civilian = len([a for a in st.session_state.aircraft_data if a['type'] in ["Commercial Airliner", "Private Jet"]])
+    st.metric("Civilian", civilian)
+with col3:
+    military = len([a for a in st.session_state.aircraft_data if a['type'] == "Military Transport"])
+    st.metric("Military", military)
+with col4:
+    stealth = len([a for a in st.session_state.aircraft_data if a.get('stealth_probability', 0) > threshold])
+    st.metric("⚠️ Potential Stealth", stealth)
 
 
 # ── RADAR DISPLAY ─────────────────────────────────────────────
 st.markdown("### 📡 Radar View")
 
-# Create radar background
-size = 600
-fig, ax = plt.subplots(figsize=(8, 8), facecolor='#0a0a1a')
+fig, ax = plt.subplots(figsize=(10, 10), facecolor='#0a0a1a')
 ax.set_facecolor('#0a0a1a')
 ax.set_xlim(-range_km, range_km)
 ax.set_ylim(-range_km, range_km)
@@ -342,52 +409,58 @@ ax.axhline(y=0, color='#335588', linewidth=0.5)
 ax.axvline(x=0, color='#335588', linewidth=0.5)
 
 # Radar center
-ax.plot(0, 0, 'o', color='#00aaff', markersize=8, label='Radar Site')
+ax.plot(0, 0, 'o', color='#00aaff', markersize=10, label='Radar Site')
 
 # Plot aircraft
 for ac in st.session_state.aircraft_data:
     x = ac['x_km']
     y = ac['y_km']
     
-    # Color based on stealth detection
+    # Color based on type and stealth detection
     if ac.get('stealth_probability', 0) > threshold:
-        color = '#ff4444'  # Red - potential stealth
+        color = '#ff4444'
         marker = 's'
-        size = 100
+        size = 120
         zorder = 10
-    elif ac['type'] in ["Commercial Airliner", "Private Jet"]:
-        color = '#88ff88'  # Green - civilian
+    elif ac['type'] == "Commercial Airliner":
+        color = '#88ff88'
+        marker = 'o'
+        size = 80
+        zorder = 5
+    elif ac['type'] == "Private Jet":
+        color = '#88ff88'
+        marker = 'd'
+        size = 70
+        zorder = 5
+    elif ac['type'] == "Military Transport":
+        color = '#ffaa44'
+        marker = '^'
+        size = 90
+        zorder = 6
+    else:
+        color = '#44aaff'
         marker = 'o'
         size = 60
         zorder = 5
-    elif ac['type'] == "Military Transport":
-        color = '#ffaa44'  # Orange - military
-        marker = '^'
-        size = 70
-        zorder = 6
-    else:
-        color = '#44aaff'  # Blue - other
-        marker = 'o'
-        size = 50
-        zorder = 5
     
-    ax.scatter(x, y, c=color, marker=marker, s=size, alpha=0.9, edgecolors='white', linewidth=0.5)
+    ax.scatter(x, y, c=color, marker=marker, s=size, alpha=0.9, edgecolors='white', linewidth=0.8)
     
     # Add callsign label
-    ax.annotate(ac['callsign'], (x, y), xytext=(5, 5), textcoords='offset points',
-                fontsize=8, color='white', alpha=0.8)
+    ax.annotate(ac['callsign'], (x, y), xytext=(8, 8), textcoords='offset points',
+                fontsize=9, color='white', alpha=0.9, fontweight='bold')
 
-# Add legend
+# Legend
 legend_elements = [
-    plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#88ff88', markersize=8, label='Civilian'),
-    plt.Line2D([0], [0], marker='^', color='w', markerfacecolor='#ffaa44', markersize=8, label='Military'),
-    plt.Line2D([0], [0], marker='s', color='w', markerfacecolor='#ff4444', markersize=8, label=f'Potential {target}'),
+    plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#88ff88', markersize=10, label='Civilian'),
+    plt.Line2D([0], [0], marker='^', color='w', markerfacecolor='#ffaa44', markersize=10, label='Military'),
+    plt.Line2D([0], [0], marker='s', color='w', markerfacecolor='#ff4444', markersize=10, label=f'Potential {target}'),
 ]
-ax.legend(handles=legend_elements, loc='upper right', facecolor='#1a1a3a', labelcolor='white')
+ax.legend(handles=legend_elements, loc='upper right', facecolor='#1a1a3a', labelcolor='white', fontsize=10)
 
-ax.set_xlabel("East-West (km)", color='white')
-ax.set_ylabel("North-South (km)", color='white')
+ax.set_xlabel("East-West (km)", color='white', fontsize=12)
+ax.set_ylabel("North-South (km)", color='white', fontsize=12)
 ax.tick_params(colors='white')
+ax.grid(True, alpha=0.2, color='white')
 
 st.pyplot(fig)
 plt.close(fig)
@@ -398,31 +471,15 @@ st.markdown("---")
 st.markdown("### ✈️ Aircraft Detected")
 
 if st.session_state.aircraft_data:
-    # Create display dataframe
     df = pd.DataFrame(st.session_state.aircraft_data)
-    
-    # Select columns to show
     display_cols = ['callsign', 'type', 'x_km', 'y_km', 'altitude', 'speed', 'stealth_probability']
     df_display = df[display_cols].copy()
     df_display['x_km'] = df_display['x_km'].round(1)
     df_display['y_km'] = df_display['y_km'].round(1)
     df_display['stealth_probability'] = df_display['stealth_probability'].round(1)
+    df_display = df_display.sort_values('stealth_probability', ascending=False)
     
-    # Highlight potential stealth
-    def highlight_stealth(val):
-        if val > threshold:
-            return 'background-color: #ff4444'
-        return ''
-    
-    st.dataframe(df_display.style.applymap(highlight_stealth, subset=['stealth_probability']), use_container_width=True)
-    
-    # Count statistics
-    total = len(df)
-    potential = len(df[df['stealth_probability'] > threshold])
-    civilian = len(df[df['type'] == "Commercial Airliner"])
-    military = len(df[df['type'] == "Military Transport"])
-    
-    st.markdown(f"**Summary:** {total} total | ✈️ {civilian} civilian | 🎖️ {military} military | ⚠️ {potential} potential {target} signatures")
+    st.dataframe(df_display, use_container_width=True)
 else:
     st.info("No aircraft detected in this area")
 
@@ -439,8 +496,9 @@ if potential_stealth:
         <div class="stealth-alert">
         ⚠️ **POTENTIAL {target} DETECTED**<br>
         📍 Position: {ac['x_km']:.1f} km E, {ac['y_km']:.1f} km N<br>
-        🎯 Signature: {ac['stealth_probability']:.1f}% match<br>
-        📡 Callsign: {ac['callsign']} | Type: {ac['type']}
+        🎯 Signature Match: {ac['stealth_probability']:.1f}%<br>
+        📡 Callsign: {ac['callsign']} | Type: {ac['type']}<br>
+        🛸 Altitude: {ac['altitude']:,} ft | Speed: {ac['speed']} kt
         </div>
         """, unsafe_allow_html=True)
 
@@ -469,6 +527,7 @@ with col_e2:
         "detections": [
             {
                 "callsign": ac['callsign'],
+                "type": ac['type'],
                 "x_km": ac['x_km'],
                 "y_km": ac['y_km'],
                 "stealth_probability": ac.get('stealth_probability', 0)
@@ -479,10 +538,10 @@ with col_e2:
     st.download_button("📋 Export Report (JSON)", json.dumps(report, indent=2), "radar_report.json", width='stretch')
 
 
-# ── AUTO-REFRESH FOR LIVE MODE ─────────────────────────────────────────────
+# ── AUTO-REFRESH ─────────────────────────────────────────────
 if st.session_state.live_mode:
     time.sleep(1)
     st.rerun()
 
 st.markdown("---")
-st.markdown("🛸 **StealthPDPRadar v8.0** | Live ADSB | Real Aircraft | PDP Stealth Detection | Tony Ford Model")
+st.markdown("🛸 **StealthPDPRadar v8.1** | OpenSky Network | Real Aircraft | PDP Stealth Detection | Tony Ford Model")
